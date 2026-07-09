@@ -1,0 +1,759 @@
+//
+//  TradeView.swift
+//  Fortune
+//
+//  Trading screen: live chart with timeframe selector, market movers,
+//  search + sector filters + sort, stock list, and three bottom sheets
+//  (order, stock detail, price alerts).
+//
+
+import SwiftUI
+import Charts
+
+struct TradeView: View {
+    @Environment(AppModel.self) private var model
+
+    @State private var selected = MockData.stocks[0]
+    @State private var timeframe = "1D"
+    @State private var search = ""
+    @State private var sector = "All"
+    @State private var sortBy: SortOption = .default_
+    @State private var moversTab: MoversTab = .gainers
+    @State private var alerts: [PriceAlert] = []
+
+    @State private var showOrderSheet = false
+    @State private var showDetailSheet = false
+    @State private var showAlertsSheet = false
+
+    enum SortOption: String, CaseIterable {
+        case default_, gainers, losers, price
+        var label: String {
+            switch self {
+            case .default_: "Default"
+            case .gainers: "↑ Top Gainers"
+            case .losers: "↓ Top Losers"
+            case .price: "Price"
+            }
+        }
+    }
+    enum MoversTab { case gainers, losers }
+
+    // MARK: Derived data
+
+    private var filtered: [Stock] {
+        MockData.stocks
+            .filter { sector == "All" || $0.sector == sector }
+            .filter {
+                search.isEmpty
+                    || $0.symbol.localizedCaseInsensitiveContains(search)
+                    || $0.name.localizedCaseInsensitiveContains(search)
+            }
+            .sorted { a, b in
+                switch sortBy {
+                case .gainers: a.pct > b.pct
+                case .losers:  a.pct < b.pct
+                case .price:   a.price > b.price
+                case .default_: false
+                }
+            }
+    }
+
+    private var movers: [Stock] {
+        let sorted = MockData.stocks.sorted {
+            moversTab == .gainers ? $0.pct > $1.pct : $0.pct < $1.pct
+        }
+        return Array(sorted.prefix(4))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            chartHeader
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    if !model.orders.isEmpty { openOrders }
+                    marketMovers
+                    searchBar
+                    sectorFilters
+                    sortControls
+                    stockList
+                    Color.clear.frame(height: 16)
+                }
+            }
+        }
+        .background(Theme.background)
+        .sheet(isPresented: $showOrderSheet) {
+            OrderSheet(stock: selected) { order in
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                    model.orders.insert(order, at: 0)
+                }
+            }
+            .presentationDetents([.height(470)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Theme.background)
+            .presentationCornerRadius(24)
+        }
+        .sheet(isPresented: $showDetailSheet) {
+            StockDetailSheet(stock: selected) {
+                showDetailSheet = false
+                showOrderSheet = true
+            }
+            .presentationDetents([.height(440)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Theme.background)
+            .presentationCornerRadius(24)
+        }
+        .sheet(isPresented: $showAlertsSheet) {
+            PriceAlertsSheet(alerts: $alerts)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(Theme.background)
+                .presentationCornerRadius(24)
+        }
+    }
+
+    // MARK: Chart header
+
+    private var chartHeader: some View {
+        VStack(spacing: 8) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        Text(selected.symbol).font(.mono(11)).tracking(2).foregroundStyle(Theme.mutedForeground)
+                        PulsingDot()
+                        Text("LIVE").font(.system(size: 11)).foregroundStyle(Theme.emerald)
+                    }
+                    Text("$\(selected.price.money())")
+                        .font(.mono(24, weight: .semibold)).foregroundStyle(Theme.foreground)
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    PnlBadge(change: selected.change, pct: selected.pct)
+                    HStack(spacing: 8) {
+                        Text("\(selected.change.signPrefix)\(selected.change.money())")
+                            .font(.mono(11)).foregroundStyle(Theme.mutedForeground)
+                        Button { showAlertsSheet = true } label: {
+                            ZStack(alignment: .topTrailing) {
+                                Image(systemName: "bell")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(alerts.isEmpty ? Color.white.opacity(0.3) : Theme.primary)
+                                    .padding(2)
+                                if !alerts.isEmpty {
+                                    Text("\(alerts.count)")
+                                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+                                        .frame(width: 14, height: 14)
+                                        .background(Theme.primary).clipShape(Circle())
+                                        .offset(x: 4, y: -4)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Timeframe selector
+            HStack(spacing: 4) {
+                ForEach(MockData.timeframes, id: \.self) { tf in
+                    let on = timeframe == tf
+                    Button { timeframe = tf } label: {
+                        Text(tf)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(on ? .white : .white.opacity(0.35))
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background {
+                                if on {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(LinearGradient(colors: [Theme.primary, Theme.indigo],
+                                                             startPoint: .leading, endPoint: .trailing))
+                                } else {
+                                    RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.05))
+                                }
+                            }
+                    }
+                }
+                Spacer()
+            }
+
+            Chart(MockData.chartByTimeframe[timeframe] ?? []) { point in
+                AreaMark(x: .value("t", point.time), y: .value("price", point.price))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(LinearGradient(
+                        colors: [Theme.primary.opacity(0.22), Theme.primary.opacity(0)],
+                        startPoint: .top, endPoint: .bottom))
+                LineMark(x: .value("t", point.time), y: .value("price", point.price))
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(Theme.primary)
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+            .chartXAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartYScale(domain: chartDomain)
+            .frame(height: 80)
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
+        .background(Theme.card)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
+    }
+
+    private var chartDomain: ClosedRange<Double> {
+        let prices = (MockData.chartByTimeframe[timeframe] ?? []).map(\.price)
+        let lo = prices.min() ?? 0, hi = prices.max() ?? 1
+        let pad = (hi - lo) * 0.15
+        return (lo - pad)...(hi + pad)
+    }
+
+    // MARK: Open orders
+
+    private var openOrders: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel(text: "Open Orders")
+            ForEach(model.orders) { order in
+                HStack(spacing: 12) {
+                    Text(order.side.rawValue)
+                        .font(.system(size: 10, weight: .bold))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background((order.side == .buy ? Theme.emerald : Theme.red).opacity(0.15))
+                        .foregroundStyle(order.side == .buy ? Theme.emerald : Theme.red)
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(order.symbol).font(.mono(12, weight: .semibold)).foregroundStyle(Theme.foreground)
+                            Text("×\(order.qty) @ $\(order.entryPrice.money())").font(.mono(12)).foregroundStyle(Theme.mutedForeground)
+                        }
+                        HStack(spacing: 8) {
+                            Label("SL \(order.stopLoss)", systemImage: "shield.lefthalf.filled")
+                                .font(.system(size: 10)).foregroundStyle(Theme.red)
+                            Label("TP \(order.takeProfit)", systemImage: "dollarsign.circle")
+                                .font(.system(size: 10)).foregroundStyle(Theme.emerald)
+                        }
+                    }
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            model.orders.removeAll { $0.id == order.id }
+                        }
+                    } label: {
+                        Label("Cancel", systemImage: "xmark")
+                            .font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.red)
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.red.opacity(0.25)))
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Theme.card)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+    }
+
+    // MARK: Market movers
+
+    private var marketMovers: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                moverTabButton(.gainers, "↑ Gainers", Theme.green)
+                moverTabButton(.losers, "↓ Losers", Theme.red)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(movers) { stock in
+                        Button {
+                            selected = stock
+                            showOrderSheet = true
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(stock.symbol).font(.mono(12, weight: .bold)).foregroundStyle(Theme.foreground)
+                                Text("\(stock.pct.signPrefix)\(stock.pct.money())%")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(stock.pct >= 0 ? Theme.emerald : Theme.red)
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Theme.card)
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+    }
+
+    private func moverTabButton(_ tab: MoversTab, _ label: String, _ tint: Color) -> some View {
+        let on = moversTab == tab
+        return Button { moversTab = tab } label: {
+            Text(label)
+                .font(.system(size: 10, weight: .bold)).tracking(0.5)
+                .foregroundStyle(on ? tint : .white.opacity(0.3))
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .background(on ? tint.opacity(0.15) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    // MARK: Search
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 13)).foregroundStyle(Theme.mutedForeground)
+            TextField("", text: $search, prompt: Text("Search stocks…").foregroundColor(Theme.mutedForeground))
+                .font(.system(size: 13)).foregroundStyle(Theme.foreground)
+            if !search.isEmpty {
+                Button { search = "" } label: {
+                    Image(systemName: "xmark").font(.system(size: 11)).foregroundStyle(Theme.mutedForeground)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Theme.card)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+    }
+
+    // MARK: Sector filters
+
+    private var sectorFilters: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(MockData.sectors, id: \.self) { s in
+                    let on = sector == s
+                    Button { sector = s } label: {
+                        Text(s)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(on ? Theme.primary : .white.opacity(0.4))
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .background(on ? Theme.primary.opacity(0.15) : .white.opacity(0.04))
+                            .overlay(Capsule().stroke(on ? Theme.primary.opacity(0.5) : .white.opacity(0.08)))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.bottom, 8)
+    }
+
+    // MARK: Sort controls
+
+    private var sortControls: some View {
+        HStack(spacing: 6) {
+            Text("Sort:").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+            ForEach(SortOption.allCases, id: \.self) { opt in
+                let on = sortBy == opt
+                Button { sortBy = opt } label: {
+                    Text(opt.label)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(on ? Color(hex: 0xA5B4FC) : .white.opacity(0.3))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(on ? Theme.indigo.opacity(0.2) : .clear)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? Theme.indigo.opacity(0.35) : .clear))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            Spacer()
+            Text("\(filtered.count) stocks").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+        }
+        .padding(.horizontal, 16).padding(.bottom, 8)
+    }
+
+    // MARK: Stock list
+
+    @ViewBuilder
+    private var stockList: some View {
+        if filtered.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
+                Text("No results for \"\(search)\"").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 40)
+        } else {
+            ForEach(filtered) { stock in
+                HStack(spacing: 0) {
+                    Button {
+                        selected = stock
+                        showOrderSheet = true
+                    } label: {
+                        HStack(spacing: 12) {
+                            Text(stock.symbol)
+                                .font(.mono(12, weight: .semibold)).foregroundStyle(Theme.primary)
+                                .frame(width: 44, height: 36)
+                                .background(Theme.secondary)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(stock.name).font(.system(size: 14, weight: .medium))
+                                    .foregroundStyle(Theme.foreground).lineLimit(1)
+                                HStack(spacing: 6) {
+                                    Text(stock.sector)
+                                        .font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(.white.opacity(0.05))
+                                        .overlay(Capsule().stroke(.white.opacity(0.08)))
+                                        .clipShape(Capsule())
+                                    Text(stock.volume).font(.mono(10)).foregroundStyle(Theme.mutedForeground)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text("$\(stock.price.money())").font(.mono(14, weight: .medium)).foregroundStyle(Theme.foreground)
+                                PnlBadge(change: stock.change, pct: stock.pct)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        selected = stock
+                        showDetailSheet = true
+                    } label: {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 15))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .padding(.leading, 10)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
+            }
+        }
+    }
+}
+
+// MARK: - Order sheet
+
+private struct OrderSheet: View {
+    let stock: Stock
+    let onPlace: (TradeOrder) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var side: OrderSide = .buy
+    @State private var qty = 10
+    @State private var stopLoss: String
+    @State private var takeProfit: String
+
+    init(stock: Stock, onPlace: @escaping (TradeOrder) -> Void) {
+        self.stock = stock
+        self.onPlace = onPlace
+        _stopLoss = State(initialValue: String(format: "%.2f", stock.price * 0.97))
+        _takeProfit = State(initialValue: String(format: "%.2f", stock.price * 1.05))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(stock.symbol).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.foreground)
+                    Text("$\(stock.price.money()) entry").font(.mono(12)).foregroundStyle(Theme.mutedForeground)
+                }
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 14)).foregroundStyle(Theme.mutedForeground)
+                        .frame(width: 32, height: 32).background(Theme.card)
+                        .overlay(Circle().stroke(Theme.border)).clipShape(Circle())
+                }
+            }
+            .padding(.bottom, 16)
+
+            HStack(spacing: 4) {
+                ForEach(OrderSide.allCases, id: \.self) { s in
+                    Button { side = s } label: {
+                        Text(s.rawValue).font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(side == s ? .white : .white.opacity(0.4))
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                            .background {
+                                if side == s {
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(s == .buy ? Color(hex: 0x16A34A) : Color(hex: 0xDC2626))
+                                }
+                            }
+                    }
+                }
+            }
+            .padding(4).background(Theme.secondary).clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.bottom, 16)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("SHARES").font(.system(size: 10)).tracking(1.5).foregroundStyle(Theme.mutedForeground)
+                HStack {
+                    Button { qty = max(1, qty - 1) } label: { Image(systemName: "minus").foregroundStyle(Theme.mutedForeground) }
+                    Text("\(qty)").font(.mono(14, weight: .semibold)).foregroundStyle(Theme.foreground).frame(maxWidth: .infinity)
+                    Button { qty += 1 } label: { Image(systemName: "plus").foregroundStyle(Theme.mutedForeground) }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10)
+                .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                Text("Notional: $\((Double(qty) * stock.price).money())")
+                    .font(.mono(10)).foregroundStyle(Theme.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(.bottom, 12)
+
+            HStack(spacing: 12) {
+                priceField(title: "Stop Loss", icon: "shield.lefthalf.filled", tint: Theme.red, text: $stopLoss)
+                priceField(title: "Take Profit", icon: "dollarsign.circle", tint: Theme.emerald, text: $takeProfit)
+            }
+            .padding(.bottom, 20)
+
+            Button {
+                onPlace(TradeOrder(symbol: stock.symbol, name: stock.name, side: side,
+                                   qty: qty, entryPrice: stock.price, stopLoss: stopLoss, takeProfit: takeProfit))
+                dismiss()
+            } label: {
+                Label("Place \(side.rawValue) Order — \(stock.symbol)", systemImage: "waveform.path.ecg")
+                    .font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                    .background(side == .buy ? Theme.buyGradient : Theme.sellGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+        .padding(.horizontal, 20).padding(.top, 20)
+    }
+
+    private func priceField(title: String, icon: String, tint: Color, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title.uppercased(), systemImage: icon).font(.system(size: 10)).tracking(1).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 2) {
+                    Text("$").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                    TextField("", text: text).keyboardType(.decimalPad)
+                        .font(.mono(14, weight: .semibold)).foregroundStyle(tint)
+                }
+                Text(pctString(for: text.wrappedValue)).font(.mono(10)).foregroundStyle(Theme.mutedForeground)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(tint.opacity(0.25)))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private func pctString(for value: String) -> String {
+        guard let v = Double(value) else { return "—" }
+        let pct = (v - stock.price) / stock.price * 100
+        return String(format: "%@%.1f%%", pct >= 0 ? "+" : "", pct)
+    }
+}
+
+// MARK: - Stock detail sheet
+
+private struct StockDetailSheet: View {
+    let stock: Stock
+    let onTrade: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(stock.symbol).font(.mono(18, weight: .bold)).foregroundStyle(Theme.foreground)
+                        Text(stock.rating)
+                            .font(.system(size: 10, weight: .bold))
+                            .padding(.horizontal, 8).padding(.vertical, 2)
+                            .background(stock.ratingColor.opacity(0.12))
+                            .foregroundStyle(stock.ratingColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                    Text(stock.name).font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                }
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 14)).foregroundStyle(Theme.mutedForeground)
+                        .frame(width: 32, height: 32).background(Theme.card)
+                        .overlay(Circle().stroke(Theme.border)).clipShape(Circle())
+                }
+            }
+            .padding(.bottom, 12)
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text("$\(stock.price.money())").font(.mono(24, weight: .bold)).foregroundStyle(Theme.foreground)
+                PnlBadge(change: stock.change, pct: stock.pct)
+            }
+            .padding(.bottom, 16)
+
+            // 52-week range
+            VStack(spacing: 6) {
+                HStack {
+                    Text("52W Low $\(stock.low52.money())").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                    Spacer()
+                    Text("52W High $\(stock.high52.money())").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                }
+                GeometryReader { geo in
+                    Capsule().fill(Theme.secondary)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(LinearGradient(colors: [Theme.primary, Theme.indigo], startPoint: .leading, endPoint: .trailing))
+                                .frame(width: geo.size.width * stock.range52Fraction)
+                        }
+                }
+                .frame(height: 6)
+                Text("\(Int(stock.range52Fraction * 100))% of 52w range")
+                    .font(.system(size: 10)).foregroundStyle(Theme.primary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(.bottom, 16)
+
+            // Stat cards
+            HStack(spacing: 10) {
+                detailStat("Market Cap", stock.mktCap)
+                detailStat("P/E Ratio", stock.pe.money(1))
+                detailStat("Volume", stock.volume)
+            }
+            .padding(.bottom, 20)
+
+            Button(action: onTrade) {
+                Label("Trade \(stock.symbol)", systemImage: "waveform.path.ecg")
+                    .font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
+                    .frame(maxWidth: .infinity).padding(.vertical, 14)
+                    .background(Theme.brandGradient)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(PressableButtonStyle())
+        }
+        .padding(.horizontal, 20).padding(.top, 20)
+    }
+
+    private func detailStat(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 4) {
+            Text(value).font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.foreground)
+            Text(label).font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 10)
+        .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+// MARK: - Price alerts sheet
+
+private struct PriceAlertsSheet: View {
+    @Binding var alerts: [PriceAlert]
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var symbol = "AAPL"
+    @State private var target = ""
+    @State private var above = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Label("Price Alerts", systemImage: "bell").font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Theme.foreground)
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 13)).foregroundStyle(Theme.mutedForeground)
+                        .frame(width: 28, height: 28).background(Theme.card)
+                        .overlay(Circle().stroke(Theme.border)).clipShape(Circle())
+                }
+            }
+            .padding(.bottom, 16)
+
+            // Add form
+            VStack(alignment: .leading, spacing: 10) {
+                Text("NEW ALERT").font(.system(size: 10)).tracking(1.5).foregroundStyle(Theme.mutedForeground)
+                HStack(spacing: 8) {
+                    Picker("", selection: $symbol) {
+                        ForEach(MockData.stocks) { Text($0.symbol).tag($0.symbol) }
+                    }
+                    .pickerStyle(.menu).tint(Theme.foreground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Theme.secondary).overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    HStack(spacing: 0) {
+                        dirButton(true, "↑", Color(hex: 0x16A34A))
+                        dirButton(false, "↓", Color(hex: 0xDC2626))
+                    }
+                    .background(Theme.secondary).overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        Text("$").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                        TextField("", text: $target, prompt: Text("Target price").foregroundColor(Theme.mutedForeground))
+                            .keyboardType(.decimalPad).font(.mono(12)).foregroundStyle(Theme.foreground)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(Theme.secondary).overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    Button {
+                        guard !target.isEmpty else { return }
+                        withAnimation { alerts.append(PriceAlert(symbol: symbol, target: target, above: above)) }
+                        target = ""
+                    } label: {
+                        Text("Add").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .background(LinearGradient(colors: [Theme.primary, Theme.indigo], startPoint: .leading, endPoint: .trailing))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    .disabled(target.isEmpty).opacity(target.isEmpty ? 0.3 : 1)
+                }
+            }
+            .padding(12).background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.bottom, 16)
+
+            // Active alerts
+            if alerts.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "bell").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
+                    Text("No alerts set yet").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 24)
+            } else {
+                Text("ACTIVE (\(alerts.count))").font(.system(size: 10)).tracking(1.5).foregroundStyle(Theme.mutedForeground)
+                    .padding(.bottom, 8)
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 8) {
+                        ForEach(alerts) { alert in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 8) {
+                                        Text(alert.symbol).font(.mono(12, weight: .bold)).foregroundStyle(Theme.foreground)
+                                        Text("\(alert.above ? "↑ Above" : "↓ Below") $\(alert.target)")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(alert.above ? Theme.emerald : Theme.red)
+                                    }
+                                    if let s = MockData.stocks.first(where: { $0.symbol == alert.symbol }) {
+                                        Text("Current: $\(s.price.money())").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                                    }
+                                }
+                                Spacer()
+                                Button {
+                                    withAnimation { alerts.removeAll { $0.id == alert.id } }
+                                } label: {
+                                    Image(systemName: "xmark").font(.system(size: 13)).foregroundStyle(.white.opacity(0.5))
+                                }
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20).padding(.top, 20)
+    }
+
+    private func dirButton(_ isAbove: Bool, _ glyph: String, _ tint: Color) -> some View {
+        Button { above = isAbove } label: {
+            Text(glyph).font(.system(size: 12, weight: .bold))
+                .foregroundStyle(above == isAbove ? .white : .white.opacity(0.4))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(above == isAbove ? tint : .clear)
+        }
+    }
+}
+
+#Preview {
+    TradeView().environment(AppModel())
+}
