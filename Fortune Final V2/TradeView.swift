@@ -13,13 +13,14 @@ import Charts
 struct TradeView: View {
     @Environment(AppModel.self) private var model
 
-    @State private var selectedSymbol = MarketService.watchlist[0]
-    @State private var timeframe      = "1D"
-    @State private var search         = ""
-    @State private var sector         = "All"
-    @State private var sortBy:        SortOption = .default_
-    @State private var moversTab:     MoversTab  = .gainers
-    @State private var alerts:        [PriceAlert] = []
+    @State private var selectedSymbol    = MarketService.watchlist[0]
+    @State private var timeframe         = "1D"
+    @State private var search            = ""
+    @State private var sector            = "All"
+    @State private var sortBy:           SortOption = .default_
+    @State private var moversTab:        MoversTab  = .gainers
+    @State private var alerts:           [PriceAlert] = []
+    @State private var appliedPrefs      = false
 
     @State private var showOrderSheet  = false
     @State private var showDetailSheet = false
@@ -92,7 +93,28 @@ struct TradeView: View {
         .background(Theme.background)
         .task {
             if model.stocks.isEmpty { await model.loadMarketData() }
+            // Apply onboarding preferences once on first load
+            if !appliedPrefs {
+                timeframe = model.defaultTimeframe
+                if let match = MarketService.sectors.first(where: { model.preferredSectors.contains($0) }) {
+                    sector = match
+                }
+                if model.defaultSortLabel == "gainers" { sortBy = .gainers }
+                appliedPrefs = true
+            }
             await model.loadChartData(symbol: selectedSymbol, timeframe: timeframe)
+        }
+        // Refresh quotes every 30 seconds
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                await model.refreshQuotes()
+            }
+        }
+        // Refresh chart every 2 minutes (Finnhub 1D uses 5-min bars)
+        .task(id: "\(selectedSymbol)_\(timeframe)") {
+            try? await Task.sleep(for: .seconds(120))
+            await model.refreshChart(symbol: selectedSymbol, timeframe: timeframe)
         }
         .onChange(of: timeframe) { _, new in
             Task { await model.loadChartData(symbol: selectedSymbol, timeframe: new) }
@@ -101,7 +123,9 @@ struct TradeView: View {
             Task { await model.loadChartData(symbol: new, timeframe: timeframe) }
         }
         .sheet(isPresented: $showOrderSheet) {
-            OrderSheet(stock: selected) { order in
+            OrderSheet(stock: selected,
+                       stopLossPct: model.defaultStopLossPct,
+                       takeProfitPct: model.defaultTakeProfitPct) { order in
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     model.placeOrder(order)
                 }
@@ -396,10 +420,55 @@ struct TradeView: View {
         .padding(.horizontal, 16).padding(.bottom, 8)
     }
 
+    // MARK: For You strip
+
+    @ViewBuilder
+    private var forYouStrip: some View {
+        let focusStocks = model.stocks.filter { model.preferredSectors.contains($0.sector) }
+        if !focusStocks.isEmpty && search.isEmpty && sector == "All" {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(Theme.accent)
+                    Text("FOR YOU").font(.mono(10)).tracking(1.5).foregroundStyle(Theme.mutedForeground)
+                }
+                .padding(.horizontal, 16)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(focusStocks) { stock in
+                            Button {
+                                selectedSymbol = stock.symbol
+                                showOrderSheet = true
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 6) {
+                                        Text(stock.symbol).font(.mono(12, weight: .bold)).foregroundStyle(Theme.primary)
+                                        Spacer()
+                                        PnlBadge(change: stock.change, pct: stock.pct)
+                                    }
+                                    Text("$\(stock.price.money())").font(.mono(13, weight: .semibold)).foregroundStyle(Theme.foreground)
+                                    Text(stock.name).font(.system(size: 10)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .frame(width: 140)
+                                .background(Theme.card)
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.primary.opacity(0.25)))
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+            .padding(.top, 12).padding(.bottom, 4)
+        }
+    }
+
     // MARK: Stock list
 
     @ViewBuilder
     private var stockList: some View {
+        forYouStrip
         if model.isLoading && model.stocks.isEmpty {
             VStack(spacing: 8) {
                 ProgressView().tint(Theme.primary)
@@ -468,8 +537,8 @@ struct TradeView: View {
 // MARK: - Order sheet
 
 private struct OrderSheet: View {
-    let stock:   Stock
-    let onPlace: (TradeOrder) -> Void
+    let stock:         Stock
+    let onPlace:       (TradeOrder) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var side:       OrderSide = .buy
@@ -477,11 +546,12 @@ private struct OrderSheet: View {
     @State private var stopLoss:   String
     @State private var takeProfit: String
 
-    init(stock: Stock, onPlace: @escaping (TradeOrder) -> Void) {
+    init(stock: Stock, stopLossPct: Double = 0.03, takeProfitPct: Double = 0.06,
+         onPlace: @escaping (TradeOrder) -> Void) {
         self.stock   = stock
         self.onPlace = onPlace
-        _stopLoss   = State(initialValue: String(format: "%.2f", stock.price * 0.97))
-        _takeProfit = State(initialValue: String(format: "%.2f", stock.price * 1.05))
+        _stopLoss   = State(initialValue: String(format: "%.2f", stock.price * (1 - stopLossPct)))
+        _takeProfit = State(initialValue: String(format: "%.2f", stock.price * (1 + takeProfitPct)))
     }
 
     var body: some View {

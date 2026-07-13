@@ -40,16 +40,24 @@ enum AppTab: String, CaseIterable, Hashable {
 
 @Observable
 final class AppModel {
-    var onboarded      = false
-    var userName       = "Trader"
-    var balance:       Double = 10_000
+    var onboarded       = false
+    var userName        = "Trader"
+    var balance:        Double = 10_000
     var startingCapital: Double = 10_000
-    var activeTab:     AppTab = .trade
-    var orders:        [TradeOrder] = []
+    var activeTab:      AppTab = .trade
+    var orders:         [TradeOrder] = []
+    var joinDate:       Date = Date()
+
+    // Onboarding preferences
+    var experience:       String   = ""   // "beginner" | "intermediate" | "pro"
+    var goal:             String   = ""   // "learn" | "grow" | "beat" | "fun"
+    var frequency:        String   = ""   // "active" | "swing" | "casual"
+    var risk:             String   = ""   // "conservative" | "balanced" | "aggressive"
+    var preferredSectors: [String] = []
 
     // Live market data
-    var stocks:    [Stock]             = []
-    var news:      [NewsItem]          = []
+    var stocks:    [Stock]               = []
+    var news:      [NewsItem]            = []
     var chartData: [String: [PricePoint]] = [:]   // key: "SYMBOL_TIMEFRAME"
     var isLoading  = false
 
@@ -60,11 +68,66 @@ final class AppModel {
 
     var predictions: [Prediction] = AppModel.defaultPredictions
 
+    // MARK: Derived preferences
+
+    var archetype: (label: String, icon: String) {
+        if experience == "pro"          && risk == "aggressive" { return ("Power Trader",       "⚡") }
+        if experience == "pro"          && risk == "balanced"   { return ("Precision Trader",   "🎯") }
+        if experience == "pro"                                  { return ("Strategic Pro",       "💎") }
+        if experience == "intermediate" && frequency == "active"{ return ("Swing Trader",       "📈") }
+        if experience == "intermediate"                         { return ("Strategic Investor",  "🧠") }
+        if risk == "aggressive"                                 { return ("Bold Explorer",       "🚀") }
+        if frequency == "active"                                { return ("Eager Learner",       "⚡") }
+        return ("Rising Trader", "🌟")
+    }
+
+    /// Default stop-loss offset from entry price based on risk appetite.
+    var defaultStopLossPct: Double {
+        switch risk {
+        case "conservative": return 0.02
+        case "aggressive":   return 0.05
+        default:             return 0.03
+        }
+    }
+
+    /// Default take-profit offset from entry price based on risk appetite.
+    var defaultTakeProfitPct: Double {
+        switch risk {
+        case "conservative": return 0.04
+        case "aggressive":   return 0.10
+        default:             return 0.06
+        }
+    }
+
+    /// Default chart timeframe based on trading frequency.
+    var defaultTimeframe: String {
+        switch frequency {
+        case "swing":  return "1W"
+        case "casual": return "1M"
+        default:       return "1D"
+        }
+    }
+
+    /// Default sort for the stock list based on goal.
+    var defaultSortLabel: String {
+        switch goal {
+        case "beat": return "gainers"
+        case "grow": return "default_"
+        default:     return "default_"
+        }
+    }
+
     // MARK: Onboarding
 
     func completeOnboarding(_ data: OnboardingData) {
         let trimmed = data.name.trimmingCharacters(in: .whitespaces)
-        userName = trimmed.isEmpty ? "Trader" : trimmed
+        userName         = trimmed.isEmpty ? "Trader" : trimmed
+        experience       = data.experience
+        goal             = data.goal
+        frequency        = data.frequency
+        risk             = data.risk
+        preferredSectors = data.sectors
+        joinDate         = Date()
         switch data.capital {
         case "1k":   startingCapital = 1_000
         case "10k":  startingCapital = 10_000
@@ -120,6 +183,20 @@ final class AppModel {
     func loadChartData(symbol: String, timeframe: String) async {
         let key = "\(symbol)_\(timeframe)"
         guard chartData[key] == nil else { return }
+        let points = await MarketService.shared.fetchChartData(symbol: symbol, timeframe: timeframe)
+        if !points.isEmpty { chartData[key] = points }
+    }
+
+    // Force-refresh quotes for all stocks (for live price updates)
+    func refreshQuotes() async {
+        let updated = await MarketService.shared.fetchStocks()
+        if !updated.isEmpty { stocks = updated }
+    }
+
+    // Force-refresh chart for the currently viewed stock/timeframe
+    func refreshChart(symbol: String, timeframe: String) async {
+        let key = "\(symbol)_\(timeframe)"
+        chartData.removeValue(forKey: key)
         let points = await MarketService.shared.fetchChartData(symbol: symbol, timeframe: timeframe)
         if !points.isEmpty { chartData[key] = points }
     }

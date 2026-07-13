@@ -9,7 +9,7 @@
 import Foundation
 
 // MARK: - API key (replace with your Finnhub key)
-let finnhubAPIKey = "YOUR_FINNHUB_API_KEY"
+let finnhubAPIKey = "d9akmi9r01qg31s551f0d9akmi9r01qg31s551fg"
 
 actor MarketService {
     static let shared = MarketService()

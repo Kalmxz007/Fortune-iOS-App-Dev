@@ -21,8 +21,8 @@ struct AccountView: View {
         var weeklyDigest = true
     }
 
-    private let level = 8
-    private let xp = 3240
+    private let level  = 8
+    private let xp     = 3240
     private let xpNext = 5000
 
     private var initials: String {
@@ -31,6 +31,34 @@ struct AccountView: View {
     }
 
     private var earnedCount: Int { model.achievements.filter(\.earned).count }
+
+    private var joinedLabel: String {
+        let df = DateFormatter(); df.dateFormat = "MMM yyyy"
+        return "Joined \(df.string(from: model.joinDate))"
+    }
+
+    private var portfolioGain: Double {
+        let currentValue = model.balance + model.holdings.reduce(0) { $0 + $1.marketValue }
+        return currentValue - model.startingCapital
+    }
+
+    private var myLeaderboardRank: Int? {
+        model.leaderboard.first(where: { $0.isMe })?.rank
+    }
+
+    private var portfolioGainPct: Double {
+        guard model.startingCapital > 0 else { return 0 }
+        return portfolioGain / model.startingCapital * 100
+    }
+
+    private var portfolioGainFormatted: String {
+        let sign = portfolioGain >= 0 ? "+" : "-"
+        return "\(sign)$\(abs(portfolioGain).money()) (\(sign)\(String(format: "%.1f", abs(portfolioGainPct)))%)"
+    }
+
+    private var bestHolding: Holding? {
+        model.holdings.max(by: { $0.pnl < $1.pnl })
+    }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -105,7 +133,7 @@ struct AccountView: View {
                             .overlay(Capsule().stroke(Theme.indigo.opacity(0.3)))
                             .clipShape(Capsule())
                     }
-                    Text("⚡ Rising Trader · Joined June 2024").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                    Text("\(model.archetype.icon) \(model.archetype.label) · \(joinedLabel)").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                     VStack(spacing: 5) {
                         HStack {
                             Text("\(xp.formatted()) XP").font(.mono(10)).foregroundStyle(.white.opacity(0.35))
@@ -136,11 +164,13 @@ struct AccountView: View {
     private var capitalCard: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Mock Capital Balance").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                Text("Capital Balance").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                 Text("$\(model.balance.money())").font(.mono(24, weight: .bold)).foregroundStyle(Theme.foreground)
                 HStack(spacing: 6) {
-                    Text("+$12,470 (+124.7%)").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.emerald)
-                    Text("from $10,000").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                    Text(portfolioGainFormatted)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(portfolioGain >= 0 ? Theme.emerald : Theme.destructive)
+                    Text("from $\(model.startingCapital.money(0))").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                 }
                 .padding(.top, 2)
             }
@@ -161,10 +191,24 @@ struct AccountView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel(text: "Trading Stats")
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                statCard("Total P&L", "+$2,542", "All time", Theme.green)
-                statCard("Win Rate", "68.4%", "46 trades", Theme.primary)
-                statCard("Best Day", "+$842", "Jun 19", Theme.accent)
-                statCard("Leaderboard", "#4", "Global rank", Color(hex: 0xF59E0B))
+                let pnl = model.totalPnL
+                let pnlSign = pnl >= 0 ? "+" : "-"
+                let pnlStr = "\(pnlSign)$\(abs(pnl).money())"
+                statCard("Total P&L", pnlStr, "All time", pnl >= 0 ? Theme.green : Theme.destructive)
+
+                let wr = model.winRate
+                let wrStr = model.closedTradeCount > 0 ? String(format: "%.1f%%", wr) : "—"
+                let wrSub = model.closedTradeCount > 0 ? "\(model.closedTradeCount) trades" : "No trades yet"
+                statCard("Win Rate", wrStr, wrSub, Theme.primary)
+
+                let bestPnl = bestHolding?.pnl ?? 0
+                let bestSign = bestPnl >= 0 ? "+" : "-"
+                let bestStr = bestHolding != nil ? "\(bestSign)$\(abs(bestPnl).money())" : "—"
+                let bestSub = bestHolding?.symbol ?? "No positions"
+                statCard("Best Position", bestStr, bestSub, Theme.accent)
+
+                let rankStr = myLeaderboardRank.map { "#\($0)" } ?? "—"
+                statCard("Leaderboard", rankStr, "Global rank", Color(hex: 0xF59E0B))
             }
         }
     }
