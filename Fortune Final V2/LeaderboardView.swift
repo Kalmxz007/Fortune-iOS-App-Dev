@@ -2,11 +2,12 @@
 //  LeaderboardView.swift
 //  Fortune
 //
-//
 
 import SwiftUI
 
 struct LeaderboardView: View {
+    @Environment(AppModel.self) private var model
+
     enum Timeframe: String, CaseIterable {
         case allTime = "All Time"
         case thisWeek = "This Week"
@@ -14,16 +15,16 @@ struct LeaderboardView: View {
 
     @State private var timeframe: Timeframe = .thisWeek
 
-    private let cols: [CGFloat] = [28, 0, 92, 60, 46]  // 0 = flexible trader column
+    private let cols: [CGFloat] = [28, 0, 92, 60, 46]
 
     private struct Challenge {
         let icon: String, title: String, detail: String, xp: Int, progress: Int, total: Int
         var done: Bool { progress >= total }
     }
     private let challenges: [Challenge] = [
-        .init(icon: "⚡", title: "First Blood",   detail: "Place your first trade today",  xp: 50,  progress: 1, total: 1),
+        .init(icon: "⚡", title: "First Blood",   detail: "Place your first trade today",    xp: 50,  progress: 1, total: 1),
         .init(icon: "📊", title: "Diversify",     detail: "Hold 3 different stocks at once", xp: 100, progress: 2, total: 3),
-        .init(icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",   xp: 200, progress: 1, total: 3),
+        .init(icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",     xp: 200, progress: 1, total: 3),
     ]
 
     var body: some View {
@@ -46,7 +47,7 @@ struct LeaderboardView: View {
                         columnHeader.padding(.bottom, 6)
                         Rectangle().fill(.white.opacity(0.07)).frame(height: 1).padding(.bottom, 6)
                         VStack(spacing: 4) {
-                            ForEach(MockData.leaderboard) { entry in
+                            ForEach(model.leaderboard) { entry in
                                 row(entry)
                             }
                         }
@@ -139,7 +140,6 @@ struct LeaderboardView: View {
 
     private func row(_ e: LeaderboardEntry) -> some View {
         HStack(spacing: 0) {
-            // Rank badge
             ZStack {
                 Circle().fill(rankColor(e.rank))
                     .overlay(Circle().stroke(e.rank > 3 ? .white.opacity(0.10) : .clear))
@@ -150,7 +150,6 @@ struct LeaderboardView: View {
             }
             .frame(width: cols[0])
 
-            // Trader
             HStack(spacing: 8) {
                 ZStack {
                     Circle().fill(RadialGradient(
@@ -168,9 +167,9 @@ struct LeaderboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
 
             Text("+$\(e.pnl.money())")
-                .font(.mono(12, weight: .semibold)).foregroundStyle(Theme.green)
+                .font(.mono(12, weight: .semibold)).foregroundStyle(e.pnl >= 0 ? Theme.green : Theme.red)
                 .frame(width: cols[2], alignment: .trailing)
-            Text("\(e.winRate.money(1))%")
+            Text(e.winRate > 0 ? "\(e.winRate.money(1))%" : "—")
                 .font(.mono(12)).foregroundStyle(.white.opacity(0.70))
                 .frame(width: cols[3], alignment: .trailing)
             Text("\(e.trades)")
@@ -204,5 +203,5 @@ struct LeaderboardView: View {
 }
 
 #Preview {
-    LeaderboardView()
+    LeaderboardView().environment(AppModel())
 }

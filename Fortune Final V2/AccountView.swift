@@ -30,7 +30,7 @@ struct AccountView: View {
         return letters.isEmpty ? "ME" : String(letters.prefix(2)).uppercased()
     }
 
-    private var earnedCount: Int { MockData.achievements.filter(\.earned).count }
+    private var earnedCount: Int { model.achievements.filter(\.earned).count }
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -190,7 +190,7 @@ struct AccountView: View {
                 Text("\(earnedCount) / 6").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
             }
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(MockData.achievements) { a in
+                ForEach(model.achievements) { a in
                     VStack(spacing: 4) {
                         Text(a.icon).font(.system(size: 24)).grayscale(a.earned ? 0 : 1)
                         Text(a.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.foreground)

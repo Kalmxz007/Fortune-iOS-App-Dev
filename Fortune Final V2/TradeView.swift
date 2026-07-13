@@ -13,15 +13,15 @@ import Charts
 struct TradeView: View {
     @Environment(AppModel.self) private var model
 
-    @State private var selected = MockData.stocks[0]
-    @State private var timeframe = "1D"
-    @State private var search = ""
-    @State private var sector = "All"
-    @State private var sortBy: SortOption = .default_
-    @State private var moversTab: MoversTab = .gainers
-    @State private var alerts: [PriceAlert] = []
+    @State private var selectedSymbol = MarketService.watchlist[0]
+    @State private var timeframe      = "1D"
+    @State private var search         = ""
+    @State private var sector         = "All"
+    @State private var sortBy:        SortOption = .default_
+    @State private var moversTab:     MoversTab  = .gainers
+    @State private var alerts:        [PriceAlert] = []
 
-    @State private var showOrderSheet = false
+    @State private var showOrderSheet  = false
     @State private var showDetailSheet = false
     @State private var showAlertsSheet = false
 
@@ -30,18 +30,27 @@ struct TradeView: View {
         var label: String {
             switch self {
             case .default_: "Default"
-            case .gainers: "↑ Top Gainers"
-            case .losers: "↓ Top Losers"
-            case .price: "Price"
+            case .gainers:  "↑ Top Gainers"
+            case .losers:   "↓ Top Losers"
+            case .price:    "Price"
             }
         }
     }
     enum MoversTab { case gainers, losers }
 
-    // MARK: Derived data
+    private var selected: Stock {
+        model.stocks.first { $0.symbol == selectedSymbol }
+            ?? Stock(symbol: selectedSymbol, name: selectedSymbol, price: 0,
+                     change: 0, pct: 0, volume: "—", high52: 1, low52: 0,
+                     pe: 0, mktCap: "—", rating: "—", ratingHex: 0x6B7280, sector: "—")
+    }
+
+    private var chartPoints: [PricePoint] {
+        model.chartData["\(selectedSymbol)_\(timeframe)"] ?? []
+    }
 
     private var filtered: [Stock] {
-        MockData.stocks
+        model.stocks
             .filter { sector == "All" || $0.sector == sector }
             .filter {
                 search.isEmpty
@@ -50,16 +59,16 @@ struct TradeView: View {
             }
             .sorted { a, b in
                 switch sortBy {
-                case .gainers: a.pct > b.pct
-                case .losers:  a.pct < b.pct
-                case .price:   a.price > b.price
+                case .gainers:  a.pct > b.pct
+                case .losers:   a.pct < b.pct
+                case .price:    a.price > b.price
                 case .default_: false
                 }
             }
     }
 
     private var movers: [Stock] {
-        let sorted = MockData.stocks.sorted {
+        let sorted = model.stocks.sorted {
             moversTab == .gainers ? $0.pct > $1.pct : $0.pct < $1.pct
         }
         return Array(sorted.prefix(4))
@@ -81,10 +90,20 @@ struct TradeView: View {
             }
         }
         .background(Theme.background)
+        .task {
+            if model.stocks.isEmpty { await model.loadMarketData() }
+            await model.loadChartData(symbol: selectedSymbol, timeframe: timeframe)
+        }
+        .onChange(of: timeframe) { _, new in
+            Task { await model.loadChartData(symbol: selectedSymbol, timeframe: new) }
+        }
+        .onChange(of: selectedSymbol) { _, new in
+            Task { await model.loadChartData(symbol: new, timeframe: timeframe) }
+        }
         .sheet(isPresented: $showOrderSheet) {
             OrderSheet(stock: selected) { order in
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                    model.orders.insert(order, at: 0)
+                    model.placeOrder(order)
                 }
             }
             .presentationDetents([.height(470)])
@@ -95,7 +114,7 @@ struct TradeView: View {
         .sheet(isPresented: $showDetailSheet) {
             StockDetailSheet(stock: selected) {
                 showDetailSheet = false
-                showOrderSheet = true
+                showOrderSheet  = true
             }
             .presentationDetents([.height(440)])
             .presentationDragIndicator(.visible)
@@ -103,7 +122,7 @@ struct TradeView: View {
             .presentationCornerRadius(24)
         }
         .sheet(isPresented: $showAlertsSheet) {
-            PriceAlertsSheet(alerts: $alerts)
+            PriceAlertsSheet(alerts: $alerts, stocks: model.stocks)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Theme.background)
@@ -122,27 +141,33 @@ struct TradeView: View {
                         PulsingDot()
                         Text("LIVE").font(.system(size: 11)).foregroundStyle(Theme.emerald)
                     }
-                    Text("$\(selected.price.money())")
-                        .font(.mono(24, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    if model.isLoading && model.stocks.isEmpty {
+                        ProgressView().tint(Theme.primary).scaleEffect(0.7)
+                    } else {
+                        Text("$\(selected.price.money())")
+                            .font(.mono(24, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    PnlBadge(change: selected.change, pct: selected.pct)
-                    HStack(spacing: 8) {
-                        Text("\(selected.change.signPrefix)\(selected.change.money())")
-                            .font(.mono(11)).foregroundStyle(Theme.mutedForeground)
-                        Button { showAlertsSheet = true } label: {
-                            ZStack(alignment: .topTrailing) {
-                                Image(systemName: "bell")
-                                    .font(.system(size: 14))
-                                    .foregroundStyle(alerts.isEmpty ? Color.white.opacity(0.3) : Theme.primary)
-                                    .padding(2)
-                                if !alerts.isEmpty {
-                                    Text("\(alerts.count)")
-                                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
-                                        .frame(width: 14, height: 14)
-                                        .background(Theme.primary).clipShape(Circle())
-                                        .offset(x: 4, y: -4)
+                    if !model.stocks.isEmpty {
+                        PnlBadge(change: selected.change, pct: selected.pct)
+                        HStack(spacing: 8) {
+                            Text("\(selected.change.signPrefix)\(selected.change.money())")
+                                .font(.mono(11)).foregroundStyle(Theme.mutedForeground)
+                            Button { showAlertsSheet = true } label: {
+                                ZStack(alignment: .topTrailing) {
+                                    Image(systemName: "bell")
+                                        .font(.system(size: 14))
+                                        .foregroundStyle(alerts.isEmpty ? Color.white.opacity(0.3) : Theme.primary)
+                                        .padding(2)
+                                    if !alerts.isEmpty {
+                                        Text("\(alerts.count)")
+                                            .font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
+                                            .frame(width: 14, height: 14)
+                                            .background(Theme.primary).clipShape(Circle())
+                                            .offset(x: 4, y: -4)
+                                    }
                                 }
                             }
                         }
@@ -152,7 +177,7 @@ struct TradeView: View {
 
             // Timeframe selector
             HStack(spacing: 4) {
-                ForEach(MockData.timeframes, id: \.self) { tf in
+                ForEach(MarketService.timeframes, id: \.self) { tf in
                     let on = timeframe == tf
                     Button { timeframe = tf } label: {
                         Text(tf)
@@ -173,21 +198,32 @@ struct TradeView: View {
                 Spacer()
             }
 
-            Chart(MockData.chartByTimeframe[timeframe] ?? []) { point in
-                AreaMark(x: .value("t", point.time), y: .value("price", point.price))
-                    .interpolationMethod(.monotone)
-                    .foregroundStyle(LinearGradient(
-                        colors: [Theme.primary.opacity(0.22), Theme.primary.opacity(0)],
-                        startPoint: .top, endPoint: .bottom))
-                LineMark(x: .value("t", point.time), y: .value("price", point.price))
-                    .interpolationMethod(.monotone)
-                    .foregroundStyle(Theme.primary)
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            if chartPoints.isEmpty {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.white.opacity(0.05))
+                    .frame(height: 80)
+                    .overlay {
+                        if model.isLoading {
+                            ProgressView().tint(Theme.primary)
+                        }
+                    }
+            } else {
+                Chart(chartPoints) { point in
+                    AreaMark(x: .value("t", point.time), y: .value("price", point.price))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(LinearGradient(
+                            colors: [Theme.primary.opacity(0.22), Theme.primary.opacity(0)],
+                            startPoint: .top, endPoint: .bottom))
+                    LineMark(x: .value("t", point.time), y: .value("price", point.price))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(Theme.primary)
+                        .lineStyle(StrokeStyle(lineWidth: 1.5))
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .chartYScale(domain: chartDomain)
+                .frame(height: 80)
             }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartYScale(domain: chartDomain)
-            .frame(height: 80)
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
         .background(Theme.card)
@@ -195,7 +231,7 @@ struct TradeView: View {
     }
 
     private var chartDomain: ClosedRange<Double> {
-        let prices = (MockData.chartByTimeframe[timeframe] ?? []).map(\.price)
+        let prices = chartPoints.map(\.price)
         let lo = prices.min() ?? 0, hi = prices.max() ?? 1
         let pad = (hi - lo) * 0.15
         return (lo - pad)...(hi + pad)
@@ -254,13 +290,13 @@ struct TradeView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 moverTabButton(.gainers, "↑ Gainers", Theme.green)
-                moverTabButton(.losers, "↓ Losers", Theme.red)
+                moverTabButton(.losers,  "↓ Losers",  Theme.red)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(movers) { stock in
                         Button {
-                            selected = stock
+                            selectedSymbol = stock.symbol
                             showOrderSheet = true
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
@@ -319,7 +355,7 @@ struct TradeView: View {
     private var sectorFilters: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(MockData.sectors, id: \.self) { s in
+                ForEach(MarketService.sectors, id: \.self) { s in
                     let on = sector == s
                     Button { sector = s } label: {
                         Text(s)
@@ -364,7 +400,13 @@ struct TradeView: View {
 
     @ViewBuilder
     private var stockList: some View {
-        if filtered.isEmpty {
+        if model.isLoading && model.stocks.isEmpty {
+            VStack(spacing: 8) {
+                ProgressView().tint(Theme.primary)
+                Text("Loading live data…").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 40)
+        } else if filtered.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
                 Text("No results for \"\(search)\"").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
@@ -374,7 +416,7 @@ struct TradeView: View {
             ForEach(filtered) { stock in
                 HStack(spacing: 0) {
                     Button {
-                        selected = stock
+                        selectedSymbol = stock.symbol
                         showOrderSheet = true
                     } label: {
                         HStack(spacing: 12) {
@@ -407,7 +449,7 @@ struct TradeView: View {
                     .buttonStyle(.plain)
 
                     Button {
-                        selected = stock
+                        selectedSymbol  = stock.symbol
                         showDetailSheet = true
                     } label: {
                         Image(systemName: "info.circle")
@@ -426,19 +468,19 @@ struct TradeView: View {
 // MARK: - Order sheet
 
 private struct OrderSheet: View {
-    let stock: Stock
+    let stock:   Stock
     let onPlace: (TradeOrder) -> Void
     @Environment(\.dismiss) private var dismiss
 
-    @State private var side: OrderSide = .buy
-    @State private var qty = 10
-    @State private var stopLoss: String
+    @State private var side:       OrderSide = .buy
+    @State private var qty         = 10
+    @State private var stopLoss:   String
     @State private var takeProfit: String
 
     init(stock: Stock, onPlace: @escaping (TradeOrder) -> Void) {
-        self.stock = stock
+        self.stock   = stock
         self.onPlace = onPlace
-        _stopLoss = State(initialValue: String(format: "%.2f", stock.price * 0.97))
+        _stopLoss   = State(initialValue: String(format: "%.2f", stock.price * 0.97))
         _takeProfit = State(initialValue: String(format: "%.2f", stock.price * 1.05))
     }
 
@@ -493,14 +535,15 @@ private struct OrderSheet: View {
             .padding(.bottom, 12)
 
             HStack(spacing: 12) {
-                priceField(title: "Stop Loss", icon: "shield.lefthalf.filled", tint: Theme.red, text: $stopLoss)
-                priceField(title: "Take Profit", icon: "dollarsign.circle", tint: Theme.emerald, text: $takeProfit)
+                priceField(title: "Stop Loss",   icon: "shield.lefthalf.filled", tint: Theme.red,    text: $stopLoss)
+                priceField(title: "Take Profit", icon: "dollarsign.circle",      tint: Theme.emerald, text: $takeProfit)
             }
             .padding(.bottom, 20)
 
             Button {
                 onPlace(TradeOrder(symbol: stock.symbol, name: stock.name, side: side,
-                                   qty: qty, entryPrice: stock.price, stopLoss: stopLoss, takeProfit: takeProfit))
+                                   qty: qty, entryPrice: stock.price,
+                                   stopLoss: stopLoss, takeProfit: takeProfit))
                 dismiss()
             } label: {
                 Label("Place \(side.rawValue) Order — \(stock.symbol)", systemImage: "waveform.path.ecg")
@@ -542,7 +585,7 @@ private struct OrderSheet: View {
 // MARK: - Stock detail sheet
 
 private struct StockDetailSheet: View {
-    let stock: Stock
+    let stock:   Stock
     let onTrade: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -576,7 +619,6 @@ private struct StockDetailSheet: View {
             }
             .padding(.bottom, 16)
 
-            // 52-week range
             VStack(spacing: 6) {
                 HStack {
                     Text("52W Low $\(stock.low52.money())").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
@@ -598,11 +640,10 @@ private struct StockDetailSheet: View {
             }
             .padding(.bottom, 16)
 
-            // Stat cards
             HStack(spacing: 10) {
                 detailStat("Market Cap", stock.mktCap)
-                detailStat("P/E Ratio", stock.pe.money(1))
-                detailStat("Volume", stock.volume)
+                detailStat("P/E Ratio",  stock.pe.money(1))
+                detailStat("Volume",     stock.volume)
             }
             .padding(.bottom, 20)
 
@@ -633,11 +674,12 @@ private struct StockDetailSheet: View {
 
 private struct PriceAlertsSheet: View {
     @Binding var alerts: [PriceAlert]
+    let stocks: [Stock]
     @Environment(\.dismiss) private var dismiss
 
-    @State private var symbol = "AAPL"
+    @State private var symbol = MarketService.watchlist[0]
     @State private var target = ""
-    @State private var above = true
+    @State private var above  = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -653,12 +695,13 @@ private struct PriceAlertsSheet: View {
             }
             .padding(.bottom, 16)
 
-            // Add form
             VStack(alignment: .leading, spacing: 10) {
                 Text("NEW ALERT").font(.system(size: 10)).tracking(1.5).foregroundStyle(Theme.mutedForeground)
                 HStack(spacing: 8) {
                     Picker("", selection: $symbol) {
-                        ForEach(MockData.stocks) { Text($0.symbol).tag($0.symbol) }
+                        ForEach(stocks.isEmpty ? MarketService.watchlist : stocks.map(\.symbol), id: \.self) {
+                            Text($0).tag($0)
+                        }
                     }
                     .pickerStyle(.menu).tint(Theme.foreground)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -667,7 +710,7 @@ private struct PriceAlertsSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     HStack(spacing: 0) {
-                        dirButton(true, "↑", Color(hex: 0x16A34A))
+                        dirButton(true,  "↑", Color(hex: 0x16A34A))
                         dirButton(false, "↓", Color(hex: 0xDC2626))
                     }
                     .background(Theme.secondary).overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
@@ -700,7 +743,6 @@ private struct PriceAlertsSheet: View {
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .padding(.bottom, 16)
 
-            // Active alerts
             if alerts.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "bell").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
@@ -721,7 +763,7 @@ private struct PriceAlertsSheet: View {
                                             .font(.system(size: 10, weight: .bold))
                                             .foregroundStyle(alert.above ? Theme.emerald : Theme.red)
                                     }
-                                    if let s = MockData.stocks.first(where: { $0.symbol == alert.symbol }) {
+                                    if let s = stocks.first(where: { $0.symbol == alert.symbol }) {
                                         Text("Current: $\(s.price.money())").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
                                     }
                                 }

@@ -2,19 +2,11 @@
 //  PredictionsView.swift
 //  Fortune
 //
-// Will Delete soon Since it is no longer being used.
-//
-//  Remove `.predict` from AppTab.barTabs to hide it.
-//
 
 import SwiftUI
 
 struct PredictionsView: View {
-    @State private var bets: [Int: PlacedBet] = Dictionary(
-        uniqueKeysWithValues: MockData.predictions.compactMap { p in
-            p.myBet.map { (p.id, $0) }
-        }
-    )
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -29,7 +21,7 @@ struct PredictionsView: View {
                 }
                 .padding(.top, 8)
 
-                ForEach(MockData.predictions) { prediction in
+                ForEach(model.predictions) { prediction in
                     card(prediction)
                 }
             }
@@ -51,7 +43,6 @@ struct PredictionsView: View {
                 }
             }
 
-            // Probability bar
             VStack(spacing: 4) {
                 HStack {
                     Text("YES \(p.yesOdds)%").font(.mono(11)).foregroundStyle(Theme.emerald)
@@ -70,8 +61,7 @@ struct PredictionsView: View {
                 .frame(height: 8)
             }
 
-            // Action
-            if let bet = bets[p.id] {
+            if let bet = p.myBet {
                 HStack(spacing: 8) {
                     Image(systemName: "bolt.fill").font(.system(size: 12)).foregroundStyle(Theme.primary)
                     HStack(spacing: 4) {
@@ -89,7 +79,7 @@ struct PredictionsView: View {
             } else {
                 HStack(spacing: 8) {
                     betButton("YES", odds: p.yesOdds, tint: Theme.emerald, prediction: p)
-                    betButton("NO", odds: p.noOdds, tint: Theme.red, prediction: p)
+                    betButton("NO",  odds: p.noOdds,  tint: Theme.red,     prediction: p)
                 }
             }
 
@@ -104,8 +94,14 @@ struct PredictionsView: View {
     private func betButton(_ label: String, odds: Int, tint: Color, prediction: Prediction) -> some View {
         Button {
             let potential = Int((100.0 * 100.0 / Double(odds)).rounded())
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                bets[prediction.id] = PlacedBet(side: label, amount: 100, potential: potential)
+            let bet       = PlacedBet(side: label, amount: 100, potential: potential)
+            if let idx = model.predictions.firstIndex(where: { $0.id == prediction.id }) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    model.predictions[idx] = Prediction(
+                        id: prediction.id, question: prediction.question,
+                        yesOdds: prediction.yesOdds, noOdds: prediction.noOdds,
+                        volume: prediction.volume, closes: prediction.closes, myBet: bet)
+                }
             }
         } label: {
             Text(label)
@@ -118,5 +114,5 @@ struct PredictionsView: View {
 }
 
 #Preview {
-    PredictionsView()
+    PredictionsView().environment(AppModel())
 }

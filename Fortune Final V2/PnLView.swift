@@ -2,7 +2,7 @@
 //  PnLView.swift
 //  Fortune
 //
-//  Portfolio screen: combined PnL, candlestick chart, performance stats,
+//  Portfolio screen: live PnL, candlestick chart, performance stats.
 //
 
 import SwiftUI
@@ -11,9 +11,16 @@ import Charts
 struct PnLView: View {
     @Environment(AppModel.self) private var model
 
-    private let currentPnL: Double = 2542
-    private let yScale: ClosedRange<Double> = -1300...2900
     private let allocColors: [UInt] = [0x38D4FF, 0x6D74FF, 0xB06AFF, 0x4ADE80]
+
+    private var yScale: ClosedRange<Double> {
+        let values = model.pnlCandles.flatMap { [$0.high, $0.low] }
+        guard !values.isEmpty else { return -1000...2000 }
+        let lo  = values.min()!
+        let hi  = values.max()!
+        let pad = (hi - lo) * 0.2
+        return (lo - pad)...(hi + pad)
+    }
 
     var body: some View {
         ZStack {
@@ -68,16 +75,20 @@ struct PnLView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("COMBINED PNL").font(.system(size: 11, weight: .medium)).tracking(0.6)
                 .foregroundStyle(.white.opacity(0.35)).padding(.bottom, 6)
-            Text("+$2,542.71").font(.mono(42, weight: .bold)).foregroundStyle(Theme.green)
+            let pnl = model.totalPnL
+            Text("\(pnl >= 0 ? "+" : "")$\(abs(pnl).money())")
+                .font(.mono(42, weight: .bold)).foregroundStyle(pnl >= 0 ? Theme.green : Theme.red)
+            let pct = model.startingCapital > 0 ? (pnl / model.startingCapital * 100) : 0
             HStack(spacing: 8) {
                 HStack(spacing: 3) {
-                    Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .bold))
-                    Text("+18.47%").font(.system(size: 12, weight: .semibold))
+                    Image(systemName: pnl >= 0 ? "arrow.up.right" : "arrow.down.right").font(.system(size: 11, weight: .bold))
+                    Text("\(pct >= 0 ? "+" : "")\(String(format: "%.2f", pct))%").font(.system(size: 12, weight: .semibold))
                 }
-                .foregroundStyle(Theme.green)
+                .foregroundStyle(pnl >= 0 ? Theme.green : Theme.red)
                 .padding(.horizontal, 10).padding(.vertical, 3)
-                .background(Theme.green.opacity(0.12)).overlay(Capsule().stroke(Theme.green.opacity(0.20))).clipShape(Capsule())
-                Text("Past 24h").font(.system(size: 12)).foregroundStyle(.white.opacity(0.30))
+                .background((pnl >= 0 ? Theme.green : Theme.red).opacity(0.12))
+                .overlay(Capsule().stroke((pnl >= 0 ? Theme.green : Theme.red).opacity(0.20))).clipShape(Capsule())
+                Text("All time").font(.system(size: 12)).foregroundStyle(.white.opacity(0.30))
                 Text("·").foregroundStyle(.white.opacity(0.15))
                 Text("Futures & Prediction").font(.system(size: 11)).foregroundStyle(.white.opacity(0.22))
             }
@@ -89,38 +100,55 @@ struct PnLView: View {
     // MARK: Candlestick chart
 
     private var chart: some View {
-        Chart {
-            ForEach(MockData.candles) { candle in
-                RuleMark(x: .value("Day", candle.day),
-                         yStart: .value("Low", candle.low), yEnd: .value("High", candle.high))
-                    .foregroundStyle(candle.isUp ? Theme.green : Theme.red)
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-                RectangleMark(x: .value("Day", candle.day),
-                              yStart: .value("Open", candle.open), yEnd: .value("Close", candle.close),
-                              width: .ratio(0.55))
-                    .foregroundStyle((candle.isUp ? Theme.green : Theme.red).opacity(0.9))
-            }
-            RuleMark(y: .value("Current", currentPnL))
-                .foregroundStyle(Theme.primary.opacity(0.3))
-                .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
-                .annotation(position: .trailing, alignment: .leading) {
-                    Text("+2.5k").font(.mono(8)).foregroundStyle(Theme.primary)
+        Group {
+            if model.pnlCandles.isEmpty {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.white.opacity(0.04))
+                    .overlay {
+                        VStack(spacing: 6) {
+                            Image(systemName: "chart.bar").font(.system(size: 20)).foregroundStyle(.white.opacity(0.2))
+                            Text("Place trades to see your P&L chart")
+                                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.25))
+                        }
+                    }
+            } else {
+                Chart {
+                    ForEach(model.pnlCandles) { candle in
+                        RuleMark(x: .value("Day", candle.day),
+                                 yStart: .value("Low",  candle.low),
+                                 yEnd:   .value("High", candle.high))
+                            .foregroundStyle(candle.isUp ? Theme.green : Theme.red)
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                        RectangleMark(x:      .value("Day",   candle.day),
+                                      yStart: .value("Open",  candle.open),
+                                      yEnd:   .value("Close", candle.close),
+                                      width:  .ratio(0.55))
+                            .foregroundStyle((candle.isUp ? Theme.green : Theme.red).opacity(0.9))
+                    }
+                    RuleMark(y: .value("Current", model.totalPnL))
+                        .foregroundStyle(Theme.primary.opacity(0.3))
+                        .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                        .annotation(position: .trailing, alignment: .leading) {
+                            Text(model.totalPnL >= 0 ? "+\(Int(model.totalPnL / 1000))k" : "\(Int(model.totalPnL / 1000))k")
+                                .font(.mono(8)).foregroundStyle(Theme.primary)
+                        }
                 }
-        }
-        .chartYScale(domain: yScale)
-        .chartXAxis {
-            AxisMarks(values: ["Jun 1", "Jun 10", "Jun 19", "Jun 27"]) {
-                AxisValueLabel().font(.mono(8)).foregroundStyle(.white.opacity(0.22))
-            }
-        }
-        .chartYAxis {
-            AxisMarks(position: .trailing, values: [-1000, 0, 1000, 2000]) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: (value.as(Double.self) == 0) ? [] : [2, 3]))
-                    .foregroundStyle(value.as(Double.self) == 0 ? .white.opacity(0.14) : .white.opacity(0.05))
-                AxisValueLabel {
-                    if let v = value.as(Double.self) {
-                        Text(v == 0 ? "0" : "\(v > 0 ? "+" : "")\(Int(v / 1000))k")
-                            .font(.mono(8)).foregroundStyle(.white.opacity(0.25))
+                .chartYScale(domain: yScale)
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 4)) {
+                        AxisValueLabel().font(.mono(8)).foregroundStyle(.white.opacity(0.22))
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) { value in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                            .foregroundStyle(.white.opacity(0.05))
+                        AxisValueLabel {
+                            if let v = value.as(Double.self) {
+                                Text(v == 0 ? "0" : "\(v > 0 ? "+" : "")\(Int(v / 1000))k")
+                                    .font(.mono(8)).foregroundStyle(.white.opacity(0.25))
+                            }
+                        }
                     }
                 }
             }
@@ -131,15 +159,19 @@ struct PnLView: View {
 
     private var statsRow: some View {
         HStack(spacing: 0) {
-            statCell("Realized", "+$2,190", Theme.green, first: true)
+            statCell("Realized",     "\(model.realizedPnL >= 0 ? "+" : "")$\(abs(model.realizedPnL).money(0))", model.realizedPnL >= 0 ? Theme.green : Theme.red, first: true)
             divider
-            statCell("Unrealized", "−$352", Theme.red)
+            statCell("Unrealized",   "\(model.unrealizedPnL >= 0 ? "+" : "")$\(abs(model.unrealizedPnL).money(0))", model.unrealizedPnL >= 0 ? Theme.green : Theme.red)
             divider
-            statCell("Win Rate", "68.4%", .white.opacity(0.95))
+            statCell("Win Rate",     model.closedTradeCount > 0 ? "\(String(format: "%.1f", model.winRate * 100))%" : "—", .white.opacity(0.95))
             divider
-            statCell("Trades", "14", .white.opacity(0.95))
+            statCell("Trades",       "\(model.orders.count)", .white.opacity(0.95))
             divider
-            statCell("Profit Factor", "2.34×", Theme.accent)
+            let pf: String = {
+                guard model.closedTradeCount > 0 && model.realizedPnL != 0 else { return "—" }
+                return String(format: "%.2f×", abs(model.realizedPnL / max(1, Double(model.closedTradeCount))))
+            }()
+            statCell("Avg Trade",    pf, Theme.accent)
         }
     }
 
@@ -158,10 +190,21 @@ struct PnLView: View {
     private var performanceSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionTitle("Performance")
-            HStack(spacing: 8) {
-                perfCell("Best Trade", "+$842", "NVDA · Jun 19", Theme.green)
-                perfCell("Worst Trade", "-$391", "AMZN · Jun 4", Theme.red)
-                perfCell("Win Streak", "5 🔥", "Personal best", Color(hex: 0xF59E0B))
+            if model.holdings.isEmpty && model.orders.isEmpty {
+                Text("No trades yet — performance data will appear here.")
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.3))
+            } else {
+                let best  = model.holdings.max(by: { $0.pnl < $1.pnl })
+                let worst = model.holdings.min(by: { $0.pnl < $1.pnl })
+                HStack(spacing: 8) {
+                    perfCell("Best Position",
+                             best.map { h in "\(h.pnl >= 0 ? "+" : "")$\(abs(h.pnl).money(0))" } ?? "—",
+                             best?.symbol ?? "—", Theme.green)
+                    perfCell("Worst Position",
+                             worst.map { h in "\(h.pnl >= 0 ? "+" : "")$\(abs(h.pnl).money(0))" } ?? "—",
+                             worst?.symbol ?? "—", Theme.red)
+                    perfCell("Win Streak", "\(model.winCount) 🔥", "All time", Color(hex: 0xF59E0B))
+                }
             }
         }
     }
@@ -182,16 +225,20 @@ struct PnLView: View {
     private var allocationSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Allocation")
-            HStack(spacing: 16) {
-                DonutChart(slices: slices)
-                    .frame(width: 80, height: 80)
-                VStack(spacing: 6) {
-                    ForEach(Array(slices.enumerated()), id: \.offset) { _, slice in
-                        HStack(spacing: 8) {
-                            Circle().fill(slice.color).frame(width: 8, height: 8)
-                            Text(slice.symbol).font(.mono(11, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
-                            Spacer()
-                            Text("\(slice.pct.money(1))%").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
+            if model.holdings.isEmpty {
+                Text("No open positions.")
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.3))
+            } else {
+                HStack(spacing: 16) {
+                    DonutChart(slices: slices).frame(width: 80, height: 80)
+                    VStack(spacing: 6) {
+                        ForEach(Array(slices.enumerated()), id: \.offset) { _, slice in
+                            HStack(spacing: 8) {
+                                Circle().fill(slice.color).frame(width: 8, height: 8)
+                                Text(slice.symbol).font(.mono(11, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                                Spacer()
+                                Text("\(slice.pct.money(1))%").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
+                            }
                         }
                     }
                 }
@@ -200,9 +247,11 @@ struct PnLView: View {
     }
 
     private var slices: [DonutChart.Slice] {
-        let total = MockData.holdings.reduce(0.0) { $0 + $1.marketValue }
-        return MockData.holdings.enumerated().map { i, h in
-            .init(symbol: h.symbol, pct: h.marketValue / total * 100, color: Color(hex: allocColors[i % allocColors.count]))
+        let total = model.holdings.reduce(0.0) { $0 + $1.marketValue }
+        guard total > 0 else { return [] }
+        return model.holdings.enumerated().map { i, h in
+            .init(symbol: h.symbol, pct: h.marketValue / total * 100,
+                  color: Color(hex: allocColors[i % allocColors.count]))
         }
     }
 
@@ -213,34 +262,39 @@ struct PnLView: View {
             HStack {
                 sectionTitle("Holdings")
                 Spacer()
-                Text("\(MockData.holdings.count) positions").font(.mono(10)).foregroundStyle(.white.opacity(0.25))
+                Text("\(model.holdings.count) positions").font(.mono(10)).foregroundStyle(.white.opacity(0.25))
             }
-            VStack(spacing: 8) {
-                ForEach(MockData.holdings) { h in
-                    HStack(spacing: 12) {
-                        Text(String(h.symbol.prefix(4)))
-                            .font(.mono(9, weight: .bold)).foregroundStyle(Theme.primary)
-                            .frame(width: 32, height: 32)
-                            .background(Theme.primary.opacity(0.1))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.primary.opacity(0.2)))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        VStack(spacing: 3) {
-                            HStack {
-                                Text(h.symbol).font(.mono(12, weight: .bold)).foregroundStyle(.white.opacity(0.9))
-                                Spacer()
-                                Text("\(h.pnl >= 0 ? "+" : "-")$\(abs(h.pnl).money(0))")
-                                    .font(.mono(12, weight: .bold)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
-                            }
-                            HStack {
-                                Text("\(h.shares) shares · avg $\(h.avgCost.money())").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
-                                Spacer()
-                                Text("\(h.pct.signPrefix)\(h.pct.money())%").font(.system(size: 10)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
+            if model.holdings.isEmpty {
+                Text("No open positions — buy a stock on the Trade tab.")
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.3))
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(model.holdings) { h in
+                        HStack(spacing: 12) {
+                            Text(String(h.symbol.prefix(4)))
+                                .font(.mono(9, weight: .bold)).foregroundStyle(Theme.primary)
+                                .frame(width: 32, height: 32)
+                                .background(Theme.primary.opacity(0.1))
+                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.primary.opacity(0.2)))
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                            VStack(spacing: 3) {
+                                HStack {
+                                    Text(h.symbol).font(.mono(12, weight: .bold)).foregroundStyle(.white.opacity(0.9))
+                                    Spacer()
+                                    Text("\(h.pnl >= 0 ? "+" : "-")$\(abs(h.pnl).money(0))")
+                                        .font(.mono(12, weight: .bold)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
+                                }
+                                HStack {
+                                    Text("\(h.shares) shares · avg $\(h.avgCost.money())").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
+                                    Spacer()
+                                    Text("\(h.pct.signPrefix)\(h.pct.money())%").font(.system(size: 10)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
+                                }
                             }
                         }
+                        .padding(.horizontal, 12).padding(.vertical, 10)
+                        .background(.white.opacity(0.04)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.07)))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(.white.opacity(0.04)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.07)))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
         }
@@ -254,25 +308,29 @@ struct PnLView: View {
                 Image(systemName: "newspaper").font(.system(size: 12)).foregroundStyle(.white.opacity(0.35))
                 sectionTitle("Market News")
             }
-            VStack(spacing: 10) {
-                ForEach(MockData.news) { n in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text(n.tag).font(.system(size: 9, weight: .bold))
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background((n.bullish ? Theme.green : Theme.red).opacity(0.15))
-                                .foregroundStyle(n.bullish ? Theme.green : Theme.red)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                            Text(n.source).font(.mono(10)).foregroundStyle(.white.opacity(0.25))
-                            Spacer()
-                            Text(n.time).font(.system(size: 10)).foregroundStyle(.white.opacity(0.18))
+            if model.news.isEmpty {
+                Text("Loading market news…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.3))
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(model.news) { n in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(n.tag).font(.system(size: 9, weight: .bold))
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background((n.bullish ? Theme.green : Theme.red).opacity(0.15))
+                                    .foregroundStyle(n.bullish ? Theme.green : Theme.red)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                Text(n.source).font(.mono(10)).foregroundStyle(.white.opacity(0.25))
+                                Spacer()
+                                Text(n.time).font(.system(size: 10)).foregroundStyle(.white.opacity(0.18))
+                            }
+                            Text(n.headline).font(.system(size: 11)).foregroundStyle(.white.opacity(0.65))
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        Text(n.headline).font(.system(size: 11)).foregroundStyle(.white.opacity(0.65))
-                            .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12).padding(.vertical, 10)
+                        .background(.white.opacity(0.03)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.06)))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(.white.opacity(0.03)).overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.06)))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
         }
@@ -292,16 +350,15 @@ struct DonutChart: View {
     var body: some View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let outer = min(size.width, size.height) / 2
-            let inner = outer * 0.58
-            var start = Angle.degrees(-90)
-
+            let outer  = min(size.width, size.height) / 2
+            let inner  = outer * 0.58
+            var start  = Angle.degrees(-90)
             for slice in slices {
                 let sweep = Angle.degrees(slice.pct / 100 * 360)
-                let end = start + sweep - .degrees(1.5)  // small gap
-                var path = Path()
-                path.addArc(center: center, radius: outer, startAngle: start, endAngle: end, clockwise: false)
-                path.addArc(center: center, radius: inner, startAngle: end, endAngle: start, clockwise: true)
+                let end   = start + sweep - .degrees(1.5)
+                var path  = Path()
+                path.addArc(center: center, radius: outer, startAngle: start, endAngle: end,   clockwise: false)
+                path.addArc(center: center, radius: inner, startAngle: end,   endAngle: start, clockwise: true)
                 path.closeSubpath()
                 context.fill(path, with: .color(slice.color))
                 start = start + sweep

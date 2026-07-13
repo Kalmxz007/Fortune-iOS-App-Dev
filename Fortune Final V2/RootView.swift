@@ -26,6 +26,7 @@ struct RootView: View {
         .environment(model)
         .preferredColorScheme(.dark)
         .tint(Theme.primary)
+        .task { await model.loadMarketData() }
     }
 }
 
