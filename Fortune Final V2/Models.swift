@@ -152,6 +152,23 @@ final class AppModel {
         closedTradeCount = 0
     }
 
+    /// Sell an entire open holding at the current live price.
+    func closePosition(_ holding: Holding) {
+        let price = stocks.first { $0.symbol == holding.symbol }?.price ?? holding.current
+        placeOrder(TradeOrder(symbol: holding.symbol, name: holding.symbol,
+                              side: .sell, qty: holding.shares, entryPrice: price,
+                              stopLoss: "", takeProfit: ""))
+    }
+
+    /// Remove an order from history, refunding balance for buy orders.
+    func cancelOrder(_ order: TradeOrder) {
+        let cost = Double(order.qty) * order.entryPrice
+        if order.side == .buy {
+            balance += cost
+        }
+        orders.removeAll { $0.id == order.id }
+    }
+
     // MARK: Order placement
 
     func placeOrder(_ order: TradeOrder) {

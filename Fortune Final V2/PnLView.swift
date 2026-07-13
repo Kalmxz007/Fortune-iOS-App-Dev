@@ -12,6 +12,7 @@ struct PnLView: View {
     @Environment(AppModel.self) private var model
 
     private let allocColors: [UInt] = [0x38D4FF, 0x6D74FF, 0xB06AFF, 0x4ADE80]
+    @State private var closingSymbol: String? = nil
 
     private var yScale: ClosedRange<Double> {
         let values = model.pnlCandles.flatMap { [$0.high, $0.low] }
@@ -39,6 +40,13 @@ struct PnLView: View {
                     FortuneFooter().padding(.top, 20)
                 }
                 .padding(.horizontal, 22).padding(.bottom, 20)
+            }
+        }
+        // Keep unrealized PnL current while this tab is visible
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                await model.refreshQuotes()
             }
         }
     }
@@ -289,6 +297,24 @@ struct PnLView: View {
                                     Spacer()
                                     Text("\(h.pct.signPrefix)\(h.pct.money())%").font(.system(size: 10)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
                                 }
+                            }
+                            // Close position button
+                            Button {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                    closingSymbol = h.symbol
+                                    model.closePosition(h)
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                                        closingSymbol = nil
+                                    }
+                                }
+                            } label: {
+                                Text(closingSymbol == h.symbol ? "✓" : "SELL")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(closingSymbol == h.symbol ? Theme.emerald : Theme.red)
+                                    .padding(.horizontal, 8).padding(.vertical, 5)
+                                    .background((closingSymbol == h.symbol ? Theme.emerald : Theme.red).opacity(0.12))
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke((closingSymbol == h.symbol ? Theme.emerald : Theme.red).opacity(0.3)))
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
                             }
                         }
                         .padding(.horizontal, 12).padding(.vertical, 10)

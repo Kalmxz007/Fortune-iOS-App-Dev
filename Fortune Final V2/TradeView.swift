@@ -289,7 +289,7 @@ struct TradeView: View {
                     Spacer()
                     Button {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            model.orders.removeAll { $0.id == order.id }
+                            model.cancelOrder(order)
                         }
                     } label: {
                         Label("Cancel", systemImage: "xmark")
