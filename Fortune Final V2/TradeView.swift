@@ -80,7 +80,7 @@ struct TradeView: View {
             chartHeader
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
-                    if !model.orders.isEmpty { openOrders }
+                    if !model.holdings.isEmpty { openPositions }
                     marketMovers
                     searchBar
                     sectorFilters
@@ -104,11 +104,13 @@ struct TradeView: View {
             }
             await model.loadChartData(symbol: selectedSymbol, timeframe: timeframe)
         }
-        // Refresh quotes every 30 seconds
+        // WebSocket: real-time prices pushed by Finnhub (no rate-limit cost)
+        .task { await model.startLivePriceStream() }
+        // REST fallback every 60 s — keeps change/pct accurate if WS is quiet
         .task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
-                await model.refreshQuotes()
+                try? await Task.sleep(for: .seconds(60))
+                await model.refreshPrices()
             }
         }
         // Refresh chart every 2 minutes (Finnhub 1D uses 5-min bars)
@@ -124,13 +126,15 @@ struct TradeView: View {
         }
         .sheet(isPresented: $showOrderSheet) {
             OrderSheet(stock: selected,
+                       balance: model.balance,
+                       currentShares: model.holdings.first(where: { $0.symbol == selected.symbol })?.shares ?? 0,
                        stopLossPct: model.defaultStopLossPct,
                        takeProfitPct: model.defaultTakeProfitPct) { order in
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     model.placeOrder(order)
                 }
             }
-            .presentationDetents([.height(470)])
+            .presentationDetents([.height(540)])
             .presentationDragIndicator(.visible)
             .presentationBackground(Theme.background)
             .presentationCornerRadius(24)
@@ -164,12 +168,30 @@ struct TradeView: View {
                         Text(selected.symbol).font(.mono(11)).tracking(2).foregroundStyle(Theme.mutedForeground)
                         PulsingDot()
                         Text("LIVE").font(.system(size: 11)).foregroundStyle(Theme.emerald)
+                        if model.isRefreshingPrices {
+                            ProgressView().scaleEffect(0.5).tint(Theme.emerald)
+                                .transition(.opacity)
+                        }
                     }
+                    .animation(.easeInOut(duration: 0.2), value: model.isRefreshingPrices)
                     if model.isLoading && model.stocks.isEmpty {
                         ProgressView().tint(Theme.primary).scaleEffect(0.7)
                     } else {
-                        Text("$\(selected.price.money())")
-                            .font(.mono(24, weight: .semibold)).foregroundStyle(Theme.foreground)
+                        let dir = model.priceDirection(for: selected.symbol, current: selected.price)
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text("$\(selected.price.money())")
+                                .font(.mono(24, weight: .semibold))
+                                .foregroundStyle(dir > 0 ? Theme.emerald : dir < 0 ? Theme.red : Theme.foreground)
+                                .contentTransition(.numericText())
+                                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: selected.price)
+                            if dir != 0 {
+                                Image(systemName: dir > 0 ? "arrow.up" : "arrow.down")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundStyle(dir > 0 ? Theme.emerald : Theme.red)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
+                        .animation(.spring(response: 0.3), value: dir)
                     }
                 }
                 Spacer()
@@ -261,51 +283,87 @@ struct TradeView: View {
         return (lo - pad)...(hi + pad)
     }
 
-    // MARK: Open orders
+    // MARK: Open positions (live P&L, reactive to WebSocket prices)
 
-    private var openOrders: some View {
+    private var openPositions: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(text: "Open Orders")
-            ForEach(model.orders) { order in
+            HStack {
+                SectionLabel(text: "My Positions")
+                Spacer()
+                let totalUnrealized = model.unrealizedPnL
+                Text("\(totalUnrealized >= 0 ? "+" : "")$\(abs(totalUnrealized).money(0))")
+                    .font(.mono(11, weight: .semibold))
+                    .foregroundStyle(totalUnrealized >= 0 ? Theme.emerald : Theme.red)
+                    .contentTransition(.numericText(countsDown: totalUnrealized < 0))
+                    .animation(.spring(response: 0.4), value: totalUnrealized)
+            }
+            ForEach(model.holdings) { h in
                 HStack(spacing: 12) {
-                    Text(order.side.rawValue)
-                        .font(.system(size: 10, weight: .bold))
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background((order.side == .buy ? Theme.emerald : Theme.red).opacity(0.15))
-                        .foregroundStyle(order.side == .buy ? Theme.emerald : Theme.red)
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                    // Symbol
+                    Text(String(h.symbol.prefix(4)))
+                        .font(.mono(9, weight: .bold)).foregroundStyle(Theme.primary)
+                        .frame(width: 36, height: 36)
+                        .background(Theme.primary.opacity(0.1))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.primary.opacity(0.2)))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                    // Details
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
-                            Text(order.symbol).font(.mono(12, weight: .semibold)).foregroundStyle(Theme.foreground)
-                            Text("×\(order.qty) @ $\(order.entryPrice.money())").font(.mono(12)).foregroundStyle(Theme.mutedForeground)
+                            Text(h.symbol).font(.mono(12, weight: .semibold)).foregroundStyle(Theme.foreground)
+                            Text("×\(h.shares)").font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
                         }
                         HStack(spacing: 8) {
-                            Label("SL \(order.stopLoss)", systemImage: "shield.lefthalf.filled")
-                                .font(.system(size: 10)).foregroundStyle(Theme.red)
-                            Label("TP \(order.takeProfit)", systemImage: "dollarsign.circle")
-                                .font(.system(size: 10)).foregroundStyle(Theme.emerald)
+                            Label("$\(h.avgCost.money())", systemImage: "arrow.right.circle")
+                                .font(.mono(10)).foregroundStyle(Theme.mutedForeground)
+                            // Live current price
+                            Text("$\(h.current.money())")
+                                .font(.mono(10, weight: .semibold))
+                                .foregroundStyle(h.pnl >= 0 ? Theme.emerald : Theme.red)
+                                .contentTransition(.numericText())
+                                .animation(.spring(response: 0.3), value: h.current)
                         }
                     }
+
                     Spacer()
+
+                    // Live P&L
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(h.pnl >= 0 ? "+" : "-")$\(abs(h.pnl).money(0))")
+                            .font(.mono(12, weight: .bold))
+                            .foregroundStyle(h.pnl >= 0 ? Theme.emerald : Theme.red)
+                            .contentTransition(.numericText(countsDown: h.pnl < 0))
+                            .animation(.spring(response: 0.4), value: h.pnl)
+                        Text("\(h.pct >= 0 ? "+" : "")\(String(format: "%.2f", h.pct))%")
+                            .font(.system(size: 10))
+                            .foregroundStyle(h.pnl >= 0 ? Theme.emerald.opacity(0.7) : Theme.red.opacity(0.7))
+                    }
+
+                    // Sell button
                     Button {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            model.cancelOrder(order)
+                            model.closePosition(h)
                         }
                     } label: {
-                        Label("Cancel", systemImage: "xmark")
-                            .font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.red)
+                        Text("SELL")
+                            .font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.red)
                             .padding(.horizontal, 8).padding(.vertical, 5)
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.red.opacity(0.25)))
+                            .background(Theme.red.opacity(0.12))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.red.opacity(0.3)))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(Theme.card)
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(
+                    h.pnl >= 0 ? Theme.emerald.opacity(0.25) : Theme.red.opacity(0.25)
+                ))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 4)
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: model.holdings.map(\.symbol))
     }
 
     // MARK: Market movers
@@ -328,6 +386,8 @@ struct TradeView: View {
                                 Text("\(stock.pct.signPrefix)\(stock.pct.money())%")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(stock.pct >= 0 ? Theme.emerald : Theme.red)
+                                    .contentTransition(.numericText())
+                                    .animation(.spring(response: 0.35), value: stock.pct)
                             }
                             .padding(.horizontal, 12).padding(.vertical, 8)
                             .background(Theme.card)
@@ -489,11 +549,21 @@ struct TradeView: View {
                         showOrderSheet = true
                     } label: {
                         HStack(spacing: 12) {
-                            Text(stock.symbol)
-                                .font(.mono(12, weight: .semibold)).foregroundStyle(Theme.primary)
-                                .frame(width: 44, height: 36)
-                                .background(Theme.secondary)
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                            let owned = model.holdings.first(where: { $0.symbol == stock.symbol }) != nil
+                            ZStack(alignment: .topTrailing) {
+                                Text(stock.symbol)
+                                    .font(.mono(12, weight: .semibold))
+                                    .foregroundStyle(owned ? Theme.emerald : Theme.primary)
+                                    .frame(width: 44, height: 36)
+                                    .background(owned ? Theme.emerald.opacity(0.12) : Theme.secondary)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                if owned {
+                                    Circle()
+                                        .fill(Theme.emerald)
+                                        .frame(width: 7, height: 7)
+                                        .offset(x: 3, y: -3)
+                                }
+                            }
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(stock.name).font(.system(size: 14, weight: .medium))
                                     .foregroundStyle(Theme.foreground).lineLimit(1)
@@ -508,8 +578,22 @@ struct TradeView: View {
                                 }
                             }
                             Spacer(minLength: 8)
+                            let dir = model.priceDirection(for: stock.symbol, current: stock.price)
                             VStack(alignment: .trailing, spacing: 4) {
-                                Text("$\(stock.price.money())").font(.mono(14, weight: .medium)).foregroundStyle(Theme.foreground)
+                                HStack(spacing: 3) {
+                                    if dir != 0 {
+                                        Image(systemName: dir > 0 ? "arrow.up" : "arrow.down")
+                                            .font(.system(size: 8, weight: .bold))
+                                            .foregroundStyle(dir > 0 ? Theme.emerald : Theme.red)
+                                            .transition(.scale.combined(with: .opacity))
+                                    }
+                                    Text("$\(stock.price.money())")
+                                        .font(.mono(14, weight: .medium))
+                                        .foregroundStyle(dir > 0 ? Theme.emerald : dir < 0 ? Theme.red : Theme.foreground)
+                                        .contentTransition(.numericText())
+                                        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: stock.price)
+                                }
+                                .animation(.spring(response: 0.3), value: dir)
                                 PnlBadge(change: stock.change, pct: stock.pct)
                             }
                         }
@@ -528,6 +612,11 @@ struct TradeView: View {
                     }
                 }
                 .padding(.horizontal, 16).padding(.vertical, 12)
+                .background {
+                    let d = model.priceDirection(for: stock.symbol, current: stock.price)
+                    if d > 0 { Theme.emerald.opacity(0.05) }
+                    else if d < 0 { Theme.red.opacity(0.05) }
+                }
                 .overlay(alignment: .bottom) { Rectangle().fill(Theme.border).frame(height: 1) }
             }
         }
@@ -538,28 +627,39 @@ struct TradeView: View {
 
 private struct OrderSheet: View {
     let stock:         Stock
+    let balance:       Double
+    let currentShares: Int
     let onPlace:       (TradeOrder) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var side:       OrderSide = .buy
-    @State private var qty         = 10
+    @State private var qty:        Int       = 1
     @State private var stopLoss:   String
     @State private var takeProfit: String
 
-    init(stock: Stock, stopLossPct: Double = 0.03, takeProfitPct: Double = 0.06,
+    init(stock: Stock, balance: Double, currentShares: Int,
+         stopLossPct: Double = 0.03, takeProfitPct: Double = 0.06,
          onPlace: @escaping (TradeOrder) -> Void) {
-        self.stock   = stock
-        self.onPlace = onPlace
+        self.stock         = stock
+        self.balance       = balance
+        self.currentShares = currentShares
+        self.onPlace       = onPlace
         _stopLoss   = State(initialValue: String(format: "%.2f", stock.price * (1 - stopLossPct)))
         _takeProfit = State(initialValue: String(format: "%.2f", stock.price * (1 + takeProfitPct)))
     }
 
+    private var totalCost: Double  { Double(qty) * stock.price }
+    private var canAfford: Bool    { side == .sell || balance >= totalCost }
+    private var maxBuyQty: Int     { stock.price > 0 ? max(1, Int(balance / stock.price)) : 1 }
+    private var sellableQty: Int   { currentShares }
+
     var body: some View {
         VStack(spacing: 0) {
+            // Header
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(stock.symbol).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.foreground)
-                    Text("$\(stock.price.money()) entry").font(.mono(12)).foregroundStyle(Theme.mutedForeground)
+                    Text("$\(stock.price.money()) · Live price").font(.mono(12)).foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
                 Button { dismiss() } label: {
@@ -568,11 +668,25 @@ private struct OrderSheet: View {
                         .overlay(Circle().stroke(Theme.border)).clipShape(Circle())
                 }
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, 12)
 
+            // Context row: balance + current position
+            HStack(spacing: 0) {
+                contextStat("Available", "$\(balance.money(0))", Theme.emerald)
+                Divider().frame(height: 28).background(Theme.border).padding(.horizontal, 8)
+                contextStat("You Own", "\(currentShares) sh", currentShares > 0 ? Theme.primary : Theme.mutedForeground)
+                Divider().frame(height: 28).background(Theme.border).padding(.horizontal, 8)
+                contextStat("Entry", "$\(stock.price.money())", Theme.foreground)
+            }
+            .padding(10)
+            .background(Theme.secondary)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.bottom, 12)
+
+            // BUY / SELL toggle
             HStack(spacing: 4) {
                 ForEach(OrderSide.allCases, id: \.self) { s in
-                    Button { side = s } label: {
+                    Button { side = s; qty = 1 } label: {
                         Text(s.rawValue).font(.system(size: 12, weight: .bold))
                             .foregroundStyle(side == s ? .white : .white.opacity(0.4))
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
@@ -583,48 +697,121 @@ private struct OrderSheet: View {
                                 }
                             }
                     }
+                    .disabled(s == .sell && currentShares == 0)
+                    .opacity(s == .sell && currentShares == 0 ? 0.35 : 1)
                 }
             }
             .padding(4).background(Theme.secondary).clipShape(RoundedRectangle(cornerRadius: 12))
-            .padding(.bottom, 16)
+            .padding(.bottom, 12)
 
-            VStack(alignment: .leading, spacing: 4) {
+            // Quantity
+            VStack(alignment: .leading, spacing: 6) {
                 Text("SHARES").font(.system(size: 10)).tracking(1.5).foregroundStyle(Theme.mutedForeground)
                 HStack {
-                    Button { qty = max(1, qty - 1) } label: { Image(systemName: "minus").foregroundStyle(Theme.mutedForeground) }
-                    Text("\(qty)").font(.mono(14, weight: .semibold)).foregroundStyle(Theme.foreground).frame(maxWidth: .infinity)
-                    Button { qty += 1 } label: { Image(systemName: "plus").foregroundStyle(Theme.mutedForeground) }
+                    Button { qty = max(1, qty - 1) } label: {
+                        Image(systemName: "minus")
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
+                            .frame(width: 36, height: 36).background(Theme.secondary).clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+                    Text("\(qty)")
+                        .font(.mono(18, weight: .heavy)).foregroundStyle(canAfford ? Theme.foreground : Theme.red)
+                        .frame(maxWidth: .infinity)
+                    Button { qty = min(qty + 1, side == .buy ? maxBuyQty : sellableQty) } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
+                            .frame(width: 36, height: 36).background(Theme.secondary).clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(canAfford ? Theme.border : Theme.red.opacity(0.5)))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
-                Text("Notional: $\((Double(qty) * stock.price).money())")
-                    .font(.mono(10)).foregroundStyle(Theme.mutedForeground)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+
+                // Quick-qty chips
+                if side == .buy {
+                    HStack(spacing: 6) {
+                        ForEach([("25%", 0.25), ("50%", 0.50), ("Max", 1.0)], id: \.0) { label, frac in
+                            let q = max(1, Int(Double(maxBuyQty) * frac))
+                            Button { qty = q } label: {
+                                Text(label)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(qty == q ? Theme.primary : .white.opacity(0.35))
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(qty == q ? Theme.primary.opacity(0.15) : .white.opacity(0.04))
+                                    .overlay(Capsule().stroke(qty == q ? Theme.primary.opacity(0.5) : .white.opacity(0.08)))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        Spacer()
+                        Text("Total: $\(totalCost.money())")
+                            .font(.mono(11)).foregroundStyle(canAfford ? Theme.mutedForeground : Theme.red)
+                    }
+                } else {
+                    HStack(spacing: 6) {
+                        ForEach([("¼", 0.25), ("½", 0.50), ("All", 1.0)], id: \.0) { label, frac in
+                            let q = max(1, Int(Double(sellableQty) * frac))
+                            Button { qty = q } label: {
+                                Text(label)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(qty == q ? Theme.red : .white.opacity(0.35))
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(qty == q ? Theme.red.opacity(0.15) : .white.opacity(0.04))
+                                    .overlay(Capsule().stroke(qty == q ? Theme.red.opacity(0.5) : .white.opacity(0.08)))
+                                    .clipShape(Capsule())
+                            }
+                        }
+                        Spacer()
+                        let gain = (stock.price - (stock.price * 0.97)) * Double(qty) // rough estimate
+                        Text("Est. proceeds: $\((Double(qty) * stock.price).money())")
+                            .font(.mono(11)).foregroundStyle(Theme.mutedForeground)
+                    }
+                }
             }
             .padding(.bottom, 12)
 
-            HStack(spacing: 12) {
-                priceField(title: "Stop Loss",   icon: "shield.lefthalf.filled", tint: Theme.red,    text: $stopLoss)
-                priceField(title: "Take Profit", icon: "dollarsign.circle",      tint: Theme.emerald, text: $takeProfit)
+            // SL / TP (buy only)
+            if side == .buy {
+                HStack(spacing: 12) {
+                    priceField(title: "Stop Loss",   icon: "shield.lefthalf.filled", tint: Theme.red,     text: $stopLoss)
+                    priceField(title: "Take Profit", icon: "dollarsign.circle",      tint: Theme.emerald,  text: $takeProfit)
+                }
+                .padding(.bottom, 12)
             }
-            .padding(.bottom, 20)
 
+            // Insufficient funds warning
+            if !canAfford {
+                Label("Insufficient balance for this order", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 8)
+            }
+
+            // Place button
             Button {
                 onPlace(TradeOrder(symbol: stock.symbol, name: stock.name, side: side,
                                    qty: qty, entryPrice: stock.price,
-                                   stopLoss: stopLoss, takeProfit: takeProfit))
+                                   stopLoss: side == .buy ? stopLoss : "",
+                                   takeProfit: side == .buy ? takeProfit : ""))
                 dismiss()
             } label: {
-                Label("Place \(side.rawValue) Order — \(stock.symbol)", systemImage: "waveform.path.ecg")
+                Label("Place \(side.rawValue) — \(qty) × \(stock.symbol)", systemImage: "waveform.path.ecg")
                     .font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
                     .frame(maxWidth: .infinity).padding(.vertical, 14)
                     .background(side == .buy ? Theme.buyGradient : Theme.sellGradient)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             }
             .buttonStyle(PressableButtonStyle())
+            .disabled(!canAfford)
+            .opacity(!canAfford ? 0.4 : 1)
         }
         .padding(.horizontal, 20).padding(.top, 20)
+    }
+
+    private func contextStat(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.mono(12, weight: .semibold)).foregroundStyle(color)
+            Text(label).font(.system(size: 9)).foregroundStyle(.white.opacity(0.3))
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func priceField(title: String, icon: String, tint: Color, text: Binding<String>) -> some View {

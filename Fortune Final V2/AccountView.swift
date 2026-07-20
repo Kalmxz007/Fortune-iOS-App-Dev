@@ -11,19 +11,16 @@ import SwiftUI
 struct AccountView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmSignOut = false
+    @State private var confirmResetPortfolio = false
+    @State private var showRiskOptions = false
+    @State private var showStopLossOptions = false
     @State private var toggles = Toggles()
 
     struct Toggles {
         var stockAlerts = true
         var watchlistSync = true
-        var extendedHours = false
         var pushNotifs = true
-        var weeklyDigest = true
     }
-
-    private let level  = 8
-    private let xp     = 3240
-    private let xpNext = 5000
 
     private var initials: String {
         let letters = model.userName.split(separator: " ").compactMap(\.first)
@@ -60,6 +57,18 @@ struct AccountView: View {
         model.holdings.max(by: { $0.pnl < $1.pnl })
     }
 
+    private var riskLabel: String {
+        switch model.risk {
+        case "conservative": return "Conservative"
+        case "aggressive":   return "Aggressive"
+        default:             return "Balanced"
+        }
+    }
+
+    private var stopLossLabel: String {
+        "−\(Int((model.defaultStopLossPct * 100).rounded()))% from entry price"
+    }
+
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
@@ -77,16 +86,42 @@ struct AccountView: View {
             }
         }
         .background(Theme.background)
-        .sheet(isPresented: $confirmSignOut) {
-            SignOutActionSheet(
-                onSignOut: {
-                    confirmSignOut = false
-                    withAnimation(.easeInOut(duration: 0.3)) { model.signOut() }
-                },
-                onCancel: { confirmSignOut = false }
-            )
-            .presentationDetents([.height(280)])
-            .presentationBackground(.clear)
+        .alert("Reset Mock Portfolio?", isPresented: $confirmResetPortfolio) {
+            Button("Cancel", role: .cancel) { }
+            Button("Reset", role: .destructive) {
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    model.resetPortfolio()
+                }
+            }
+        } message: {
+            Text("This will clear your portfolio, trades, P&L, and mock funds back to normal. Your personalizations and settings will stay saved.")
+        }
+        .alert("Sign Out of Fortune?", isPresented: $confirmSignOut) {
+            Button("Cancel", role: .cancel) { }
+            Button("Sign Out", role: .destructive) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    model.signOut()
+                }
+            }
+        } message: {
+            Text("Are you sure You want to sign out. You will be returned to the onboarding screen. Your current portfolio data and progress will NOT be saved and a new account will be generated")
+        }
+        .alert("Choose Risk Level", isPresented: $showRiskOptions) {
+            Button("Conservative") { model.updateRisk("conservative") }
+            Button("Balanced") { model.updateRisk("balanced") }
+            Button("Aggressive") { model.updateRisk("aggressive") }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This updates your trading profile and risk-based suggestions.")
+        }
+        .alert("Choose Default Stop Loss", isPresented: $showStopLossOptions) {
+            Button("2%") { model.updateDefaultStopLossPct(0.02) }
+            Button("3%") { model.updateDefaultStopLossPct(0.03) }
+            Button("5%") { model.updateDefaultStopLossPct(0.05) }
+            Button("10%") { model.updateDefaultStopLossPct(0.10) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("New buy orders will prefill stop loss using this percentage below the entry price.")
         }
     }
 
@@ -126,7 +161,7 @@ struct AccountView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(model.userName).font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.foreground)
-                        Text("Lv.\(level)").font(.system(size: 10, weight: .bold))
+                        Text("Lv.\(model.level)").font(.system(size: 10, weight: .bold))
                             .padding(.horizontal, 8).padding(.vertical, 2)
                             .background(Theme.indigo.opacity(0.2))
                             .foregroundStyle(Color(hex: 0xA5B4FC))
@@ -136,15 +171,18 @@ struct AccountView: View {
                     Text("\(model.archetype.icon) \(model.archetype.label) · \(joinedLabel)").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                     VStack(spacing: 5) {
                         HStack {
-                            Text("\(xp.formatted()) XP").font(.mono(10)).foregroundStyle(.white.opacity(0.35))
+                            Text("\(model.xpInCurrentLevel.formatted()) XP").font(.mono(10)).foregroundStyle(.white.opacity(0.35))
+                                .contentTransition(.numericText())
+                                .animation(.spring(response: 0.4), value: model.xpInCurrentLevel)
                             Spacer()
-                            Text("Next lv: \(xpNext.formatted())").font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
+                            Text("Lv.\(model.level + 1): \(1_000.formatted())").font(.system(size: 10)).foregroundStyle(.white.opacity(0.35))
                         }
                         GeometryReader { geo in
                             Capsule().fill(.white.opacity(0.08))
                                 .overlay(alignment: .leading) {
                                     Capsule().fill(Theme.brandGradient)
-                                        .frame(width: geo.size.width * Double(xp) / Double(xpNext))
+                                        .frame(width: geo.size.width * model.xpProgress)
+                                        .animation(.spring(response: 0.6), value: model.xpProgress)
                                 }
                         }
                         .frame(height: 6)
@@ -263,11 +301,15 @@ struct AccountView: View {
             rowDivider
             ToggleRow(icon: "star", label: "Watchlist Sync", detail: "Sync starred stocks across devices", isOn: $toggles.watchlistSync)
             rowDivider
-            ToggleRow(icon: "chart.bar", label: "Extended Hours", detail: "Pre & after-market data", isOn: $toggles.extendedHours)
+            Button { showRiskOptions = true } label: {
+                NavRow(icon: "waveform.path.ecg", label: "Risk Level", detail: riskLabel)
+            }
+            .buttonStyle(.plain)
             rowDivider
-            NavRow(icon: "waveform.path.ecg", label: "Risk Level", detail: "Conservative")
-            rowDivider
-            NavRow(icon: "shield.lefthalf.filled", label: "Default Stop Loss", detail: "−3% from entry price")
+            Button { showStopLossOptions = true } label: {
+                NavRow(icon: "shield.lefthalf.filled", label: "Default Stop Loss", detail: stopLossLabel)
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -275,7 +317,15 @@ struct AccountView: View {
         section("Notifications") {
             ToggleRow(icon: "bell", label: "Push Notifications", detail: "Alerts and market updates", isOn: $toggles.pushNotifs)
             rowDivider
-            ToggleRow(icon: "newspaper", label: "Weekly Digest", detail: "Summary every Monday morning", isOn: $toggles.weeklyDigest)
+            ToggleRow(
+                icon: "newspaper",
+                label: "Weekly Digest",
+                detail: "Show market news on Portfolio",
+                isOn: Binding(
+                    get: { model.weeklyDigestEnabled },
+                    set: { model.updateWeeklyDigestEnabled($0) }
+                )
+            )
             rowDivider
             NavRow(icon: "bolt", label: "XP Milestones", detail: "Notify when you level up")
         }
@@ -283,8 +333,8 @@ struct AccountView: View {
 
     private var appSection: some View {
         section("App") {
-            SettingRow(icon: "apple.logo", label: "Sign in with Apple", detail: "Connected") {
-                Text("Active").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.emerald)
+            SettingRow(icon: "internaldrive", label: "Data Storage", detail: "Progress saved locally on device") {
+                Text("Saved").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.emerald)
             }
             rowDivider
             NavRow(icon: "trophy", label: "Leaderboard Profile", detail: "Public · Global rank #4")
@@ -311,7 +361,7 @@ struct AccountView: View {
 
     private var actions: some View {
         VStack(spacing: 12) {
-            Button { model.resetPortfolio() } label: {
+            Button { confirmResetPortfolio = true } label: {
                 Text("Reset Mock Portfolio").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.destructive)
                     .frame(maxWidth: .infinity).padding(.vertical, 12)
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.destructive.opacity(0.3)))
@@ -383,44 +433,6 @@ private struct NavRow: View {
     }
 }
 
-// MARK: - Sign out action sheet (iOS style)
-
-private struct SignOutActionSheet: View {
-    let onSignOut: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Spacer()
-            VStack(spacing: 0) {
-                VStack(spacing: 4) {
-                    Text("Sign Out of Fortune").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-                    Text("Your portfolio data will be saved and you'll be returned to the welcome screen.")
-                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.45))
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal, 16).padding(.vertical, 14)
-
-                Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
-
-                Button(action: onSignOut) {
-                    Text("Sign Out").font(.system(size: 20)).foregroundStyle(Color(hex: 0xFF453A))
-                        .frame(maxWidth: .infinity).padding(.vertical, 16)
-                }
-            }
-            .background(Color(hex: 0x1E1E20).opacity(0.97))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-
-            Button(action: onCancel) {
-                Text("Cancel").font(.system(size: 20, weight: .semibold)).foregroundStyle(Color(hex: 0x0A84FF))
-                    .frame(maxWidth: .infinity).padding(.vertical, 16)
-                    .background(Color(hex: 0x1E1E20).opacity(0.97))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-        }
-        .padding(.horizontal, 8).padding(.bottom, 8)
-    }
-}
 
 #Preview {
     AccountView().environment(AppModel())

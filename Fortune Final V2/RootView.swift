@@ -3,7 +3,6 @@
 //  Fortune
 //
 //  App entry point: switches between onboarding and the main tabbed shell.
-//  This is the first screen that appears when opening the app.
 //
 
 import SwiftUI
@@ -34,38 +33,70 @@ struct RootView: View {
 
 struct MainShell: View {
     @Environment(AppModel.self) private var model
+    @State private var confirmVisible = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            if model.activeTab != .account {
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
                 HeaderBar()
-            }
 
-            Group {
-                switch model.activeTab {
-                case .trade:   TradeView()
-                case .predict: PredictionsView()
-                case .leaders: LeaderboardView()
-                case .pnl:     PnLView()
-                case .account: AccountView()
+                Group {
+                    switch model.activeTab {
+                    case .trade:   TradeView()
+                    case .leaders: LeaderboardView()
+                    case .pnl:     PnLView()
+                    case .account: AccountView()
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .id(model.activeTab)
-            .transition(.opacity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .id(model.activeTab)
+                .transition(.opacity)
 
-            if model.activeTab != .account {
                 FortuneTabBar()
+            }
+
+            // Global trade confirmation toast — sits above the tab bar
+            if confirmVisible, let msg = model.tradeConfirmation {
+                let isWin = msg.contains("+")
+                HStack(spacing: 8) {
+                    Image(systemName: msg.starts(with: "Bought") ? "arrow.up.circle.fill" : (isWin ? "checkmark.circle.fill" : "minus.circle.fill"))
+                        .foregroundStyle(msg.starts(with: "Bought") ? Theme.primary : (isWin ? Theme.emerald : Theme.red))
+                    Text(msg)
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                }
+                .padding(.horizontal, 18).padding(.vertical, 11)
+                .background(.ultraThinMaterial)
+                .background(Color(hex: 0x111827).opacity(0.7))
+                .clipShape(Capsule())
+                .shadow(color: .black.opacity(0.3), radius: 12, y: 4)
+                .padding(.bottom, 80)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(99)
             }
         }
         .background(Theme.background)
+        .onChange(of: model.tradeConfirmation) { _, new in
+            guard new != nil else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { confirmVisible = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+                withAnimation(.easeOut(duration: 0.3)) { confirmVisible = false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    model.tradeConfirmation = nil
+                }
+            }
+        }
     }
 }
 
-// MARK: - Header
+// MARK: - Header bar
 
 private struct HeaderBar: View {
     @Environment(AppModel.self) private var model
+
+    private var totalValue: Double {
+        model.balance + model.holdings.reduce(0) { $0 + $1.marketValue }
+    }
+    private var totalChange: Double { totalValue - model.startingCapital }
 
     var body: some View {
         HStack {
@@ -76,17 +107,37 @@ private struct HeaderBar: View {
                     .foregroundStyle(Theme.brandGradient)
             }
             Spacer()
-            HStack(spacing: 6) {
-                PulsingDot()
-                Text("$\(model.balance.money(0))")
-                    .font(.mono(12, weight: .medium))
-                    .foregroundStyle(Theme.emerald)
+
+            // Portfolio value pill — updates live as prices move
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                    model.activeTab = .pnl
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    PulsingDot()
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("$\(totalValue.money(0))")
+                            .font(.mono(13, weight: .semibold))
+                            .foregroundStyle(Theme.emerald)
+                            .contentTransition(.numericText())
+                            .animation(.spring(response: 0.4), value: totalValue)
+                        if !model.holdings.isEmpty {
+                            Text("\(totalChange >= 0 ? "+" : "")\(totalChange.money(0))")
+                                .font(.mono(9))
+                                .foregroundStyle(totalChange >= 0 ? Theme.emerald.opacity(0.7) : Theme.red.opacity(0.7))
+                                .contentTransition(.numericText(countsDown: totalChange < 0))
+                                .animation(.spring(response: 0.4), value: totalChange)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Theme.emerald.opacity(0.10))
+                .overlay(Capsule().stroke(Theme.emerald.opacity(0.20), lineWidth: 1))
+                .clipShape(Capsule())
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Theme.emerald.opacity(0.10))
-            .overlay(Capsule().stroke(Theme.emerald.opacity(0.20), lineWidth: 1))
-            .clipShape(Capsule())
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 10)
@@ -112,9 +163,23 @@ private struct FortuneTabBar: View {
                     }
                 } label: {
                     VStack(spacing: 3) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 18, weight: active ? .semibold : .regular))
-                            .offset(y: active ? -1 : 0)
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 18, weight: active ? .semibold : .regular))
+                                .offset(y: active ? -1 : 0)
+
+                            // Badge: open position count on Portfolio tab
+                            if tab == .pnl && !model.holdings.isEmpty {
+                                Text("\(model.holdings.count)")
+                                    .font(.system(size: 8, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                    .frame(minWidth: 14, minHeight: 14)
+                                    .background(Theme.primary)
+                                    .clipShape(Capsule())
+                                    .offset(x: 8, y: -6)
+                                    .transition(.scale.combined(with: .opacity))
+                            }
+                        }
                         Text(tab.label)
                             .font(.system(size: 10, weight: .medium))
                         ZStack {
@@ -134,6 +199,7 @@ private struct FortuneTabBar: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PressableButtonStyle())
+                .animation(.spring(response: 0.3), value: model.holdings.count)
             }
         }
         .background(Theme.card.opacity(0.85))

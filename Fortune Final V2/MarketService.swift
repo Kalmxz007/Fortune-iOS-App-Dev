@@ -8,13 +8,11 @@
 
 import Foundation
 
-// MARK: - API key (replace with your Finnhub key)
-let finnhubAPIKey = "d9akmi9r01qg31s551f0d9akmi9r01qg31s551fg"
-
 actor MarketService {
     static let shared = MarketService()
 
     private let base = "https://finnhub.io/api/v1"
+    private let apiKey = "d9akmi9r01qg31s551f0d9akmi9r01qg31s551fg"
 
     static let watchlist = [
         "AAPL", "NVDA", "MSFT", "TSLA", "AMZN", "META",
@@ -46,6 +44,58 @@ actor MarketService {
     ]
 
     // MARK: - Public
+
+    // MARK: - WebSocket live feed
+
+    /// Opens a Finnhub WebSocket and streams (symbol, price) pairs in real time.
+    /// The caller is responsible for reconnecting if the stream ends.
+    func liveTradeStream() -> AsyncStream<(symbol: String, price: Double)> {
+        let url = URL(string: "wss://ws.finnhub.io?token=\(apiKey)")!
+        let ws  = URLSession.shared.webSocketTask(with: url)
+        ws.resume()
+
+        return AsyncStream { continuation in
+            Task {
+                // Subscribe to every watchlist symbol
+                for symbol in Self.watchlist {
+                    let msg = #"{"type":"subscribe","symbol":"\#(symbol)"}"#
+                    try? await ws.send(.string(msg))
+                }
+
+                continuation.onTermination = { _ in ws.cancel(with: .goingAway, reason: nil) }
+
+                while !Task.isCancelled {
+                    guard let raw = try? await ws.receive() else { break }
+                    if case .string(let text) = raw,
+                       let data = text.data(using: .utf8),
+                       let msg  = try? JSONDecoder().decode(WSTradeMessage.self, from: data),
+                       msg.type == "trade" {
+                        for trade in msg.data ?? [] {
+                            continuation.yield((trade.s, trade.p))
+                        }
+                    }
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    /// Lightweight refresh: only hits /quote (1 call per symbol instead of 3).
+    func fetchQuotesOnly() async -> [String: (price: Double, change: Double, pct: Double)] {
+        await withTaskGroup(of: (String, Double, Double, Double)?.self) { group in
+            for symbol in Self.watchlist {
+                group.addTask {
+                    guard let q = try? await self.rawQuote(symbol: symbol) else { return nil }
+                    return (symbol, q.current, q.change, q.percentChange)
+                }
+            }
+            var result: [String: (Double, Double, Double)] = [:]
+            for await item in group {
+                if let (sym, price, change, pct) = item { result[sym] = (price, change, pct) }
+            }
+            return result
+        }
+    }
 
     func fetchStocks() async -> [Stock] {
         await withTaskGroup(of: Stock?.self) { group in
@@ -186,7 +236,7 @@ actor MarketService {
     private func endpoint(_ path: String, _ params: [String: String]) -> URL {
         var comps = URLComponents(string: base + path)!
         var items = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        items.append(URLQueryItem(name: "token", value: finnhubAPIKey))
+        items.append(URLQueryItem(name: "token", value: apiKey))
         comps.queryItems = items
         return comps.url!
     }
@@ -197,7 +247,7 @@ actor MarketService {
 private struct FinnhubQuote: Decodable {
     let current, change, percentChange, high, low: Double
     enum CodingKeys: String, CodingKey { case current="c", change="d", percentChange="dp", high="h", low="l" }
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         current       = (try? c.decode(Double.self, forKey: .current))       ?? 0
         change        = (try? c.decode(Double.self, forKey: .change))        ?? 0
@@ -207,7 +257,14 @@ private struct FinnhubQuote: Decodable {
     }
 }
 
-private struct FinnhubMetricsResponse: Decodable { let metric: FinnhubMetric }
+private struct FinnhubMetricsResponse: Decodable {
+    let metric: FinnhubMetric
+    enum CodingKeys: CodingKey { case metric }
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        metric = try c.decode(FinnhubMetric.self, forKey: .metric)
+    }
+}
 
 private struct FinnhubMetric: Decodable {
     let week52High, week52Low, peExclExtraTTM, marketCapitalization: Double?
@@ -233,9 +290,27 @@ private struct FinnhubRecommendation: Decodable {
 private struct FinnhubCandles: Decodable {
     let closes: [Double]?, timestamps: [Int]?, status: String
     enum CodingKeys: String, CodingKey { case closes="c", timestamps="t", status="s" }
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        closes     = try? c.decode([Double].self, forKey: .closes)
+        timestamps = try? c.decode([Int].self, forKey: .timestamps)
+        status     = (try? c.decode(String.self, forKey: .status)) ?? ""
+    }
 }
 
 private struct FinnhubNewsItem: Decodable {
     let headline, source, related: String
     let datetime: Int
+}
+
+// MARK: - WebSocket message types
+
+private struct WSTradeMessage: Decodable {
+    let type: String
+    let data: [WSTrade]?
+
+    struct WSTrade: Decodable {
+        let s: String   // symbol
+        let p: Double   // price
+    }
 }

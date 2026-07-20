@@ -13,7 +13,6 @@ struct OnboardingView: View {
     @State private var step = 0
     @State private var forward = true
     @State private var data = OnboardingData()
-    @State private var appleSignedIn = false
 
     private let totalPersonalSteps = 7  // steps 1–7
 
@@ -139,24 +138,7 @@ struct OnboardingView: View {
             .padding(.top, 8).padding(.bottom, 40)
 
             VStack(spacing: 12) {
-                Button {
-                    data.name = "Alex Fortune"
-                    appleSignedIn = true
-                    advance(to: 2)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "apple.logo")
-                        Text("Sign in with Apple").fontWeight(.semibold)
-                    }
-                    .font(.system(size: 15)).foregroundStyle(.white)
-                    .frame(maxWidth: .infinity).padding(.vertical, 16)
-                    .background(.black).overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.15)))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                }
-                .buttonStyle(PressableButtonStyle())
-
                 gradientButton("Create Profile") { advance(to: 1) }
-
                 Text("Mock capital only · No financial advice").font(.system(size: 11)).foregroundStyle(.white.opacity(0.22))
             }
             Spacer()
@@ -395,14 +377,6 @@ struct OnboardingView: View {
                         }
                     }
                     .padding(.bottom, 20)
-                }
-
-                if appleSignedIn {
-                    HStack(spacing: 6) {
-                        Image(systemName: "apple.logo").font(.system(size: 12))
-                        Text("Signed in with Apple").font(.system(size: 11))
-                    }
-                    .foregroundStyle(.white.opacity(0.35)).padding(.bottom, 12)
                 }
 
                 gradientButton("Enter Fortune →") { finish() }
