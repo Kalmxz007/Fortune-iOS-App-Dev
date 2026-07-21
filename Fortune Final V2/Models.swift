@@ -128,7 +128,7 @@ final class AppModel {
     // Live market data
     var stocks:    [Stock]                = []
     var news:      [NewsItem]             = []
-    var chartData: [String: [PricePoint]] = [:]
+    var chartData: [String: [Candle]] = [:]
     var isLoading  = false
     var lastNewsRefresh: Date? = nil
 
@@ -142,6 +142,10 @@ final class AppModel {
     var tradeConfirmation: String? = nil
     // Last SL/TP alert message (cleared after display)
     var lastAlert: String? = nil
+    // Controls the tutorial sheet
+    var showTutorial = false
+    // Triggers the First Blood confetti celebration (first trade of the day)
+    var showFirstBloodCelebration = false
 
     // Price direction tracking: populated before each quote refresh
     var previousPrices:      [String: Double] = [:]
@@ -290,6 +294,9 @@ final class AppModel {
         }
         balance = startingCapital
         onboarded = true
+        if experience == "beginner" || experience == "intermediate" {
+            showTutorial = true
+        }
         save()
     }
 
@@ -360,6 +367,7 @@ final class AppModel {
 
     func placeOrder(_ order: TradeOrder) {
         let cost = Double(order.qty) * order.entryPrice
+        let isFirstTodayBuy = order.side == .buy && !hasTradeToday()
         if order.side == .buy {
             guard balance >= cost else { return }
             balance -= cost
@@ -389,7 +397,13 @@ final class AppModel {
                 : "Sold \(order.symbol) · -$\(String(format: "%.2f", abs(realized)))"
         }
         orders.insert(order, at: 0)
+        if isFirstTodayBuy { showFirstBloodCelebration = true }
         save()
+    }
+
+    private func hasTradeToday() -> Bool {
+        let today = Calendar.current.startOfDay(for: Date())
+        return orders.contains { Calendar.current.startOfDay(for: $0.date) == today }
     }
 
     // MARK: SL/TP auto-execution
@@ -602,16 +616,20 @@ final class AppModel {
 
     // MARK: Leaderboard
 
+    /// Incremented every 60 s by LeaderboardView so @Observable re-evaluates bot PnLs.
+    var leaderboardRefreshTick = 0
+
     var leaderboard: [LeaderboardEntry] {
+        _ = leaderboardRefreshTick  // register @Observable dependency for live updates
         var entries: [LeaderboardEntry] = [
-            .init(rank: 0, name: "Atlas",  pnl: 24_857.12, winRate: 72.6, trades: 156, colorHex: 0xF59E0B, symbol: "▲"),
-            .init(rank: 0, name: "Cipher", pnl: 18_392.45, winRate: 69.3, trades: 128, colorHex: 0x6D74FF, symbol: "◆"),
-            .init(rank: 0, name: "Nova",   pnl: 14_672.33, winRate: 68.8, trades: 104, colorHex: 0x38D4FF, symbol: "★"),
-            .init(rank: 0, name: "Vanta",  pnl:  9_876.34, winRate: 63.7, trades:  88, colorHex: 0x4ADE80, symbol: "◉"),
-            .init(rank: 0, name: "Orion",  pnl:  7_654.21, winRate: 62.3, trades:  74, colorHex: 0x38D4FF, symbol: "✦"),
-            .init(rank: 0, name: "Solace", pnl:  6_321.98, winRate: 61.2, trades:  68, colorHex: 0xF472B6, symbol: "◈"),
-            .init(rank: 0, name: "Apex",   pnl:  5_432.19, winRate: 60.4, trades:  59, colorHex: 0xFB923C, symbol: "▲"),
-            .init(rank: 0, name: userName, pnl: totalPnL,  winRate: winRate * 100,
+            .init(rank: 0, name: "Atlas",  pnl: allTimeBotPnL( 2_200,  5.5, 140, 1001), winRate: 58.4, trades: 42 + botTradeOffset(1001), colorHex: 0xF59E0B, symbol: "▲"),
+            .init(rank: 0, name: "Cipher", pnl: allTimeBotPnL( 1_050,  2.8,  90, 1002), winRate: 54.1, trades: 37 + botTradeOffset(1002), colorHex: 0x6D74FF, symbol: "◆"),
+            .init(rank: 0, name: "Nova",   pnl: allTimeBotPnL(   380,  1.0,  70, 1003), winRate: 51.8, trades: 31 + botTradeOffset(1003), colorHex: 0x38D4FF, symbol: "★"),
+            .init(rank: 0, name: "Vanta",  pnl: allTimeBotPnL(  -280, -1.8,  80, 1004), winRate: 46.2, trades: 28 + botTradeOffset(1004), colorHex: 0x4ADE80, symbol: "◉"),
+            .init(rank: 0, name: "Orion",  pnl: allTimeBotPnL(  -750, -3.5, 100, 1005), winRate: 43.5, trades: 24 + botTradeOffset(1005), colorHex: 0x38D4FF, symbol: "✦"),
+            .init(rank: 0, name: "Solace", pnl: allTimeBotPnL(-1_150, -2.2, 110, 1006), winRate: 40.8, trades: 19 + botTradeOffset(1006), colorHex: 0xF472B6, symbol: "◈"),
+            .init(rank: 0, name: "Apex",   pnl: allTimeBotPnL(-1_900, -6.0, 130, 1007), winRate: 37.3, trades: 15 + botTradeOffset(1007), colorHex: 0xFB923C, symbol: "▲"),
+            .init(rank: 0, name: userName, pnl: totalPnL, winRate: winRate * 100,
                   trades: orders.count, colorHex: 0xB06AFF, symbol: "♛", isMe: true),
         ]
         entries.sort { $0.pnl > $1.pnl }
@@ -619,6 +637,73 @@ final class AppModel {
             LeaderboardEntry(rank: i + 1, name: e.name, pnl: e.pnl, winRate: e.winRate,
                              trades: e.trades, colorHex: e.colorHex, symbol: e.symbol, isMe: e.isMe)
         }
+    }
+
+    var weeklyLeaderboard: [LeaderboardEntry] {
+        _ = leaderboardRefreshTick  // register @Observable dependency for live updates
+        var entries: [LeaderboardEntry] = [
+            .init(rank: 0, name: "Vanta",  pnl: weeklyBotPnL( 1.7,  55, 2001), winRate: 66.7, trades: 12 + botTradeOffset(2001), colorHex: 0x4ADE80, symbol: "◉"),
+            .init(rank: 0, name: "Solace", pnl: weeklyBotPnL( 0.9,  40, 2002), winRate: 60.0, trades:  9 + botTradeOffset(2002), colorHex: 0xF472B6, symbol: "◈"),
+            .init(rank: 0, name: "Nova",   pnl: weeklyBotPnL( 0.3,  30, 2003), winRate: 55.6, trades:  8 + botTradeOffset(2003), colorHex: 0x38D4FF, symbol: "★"),
+            .init(rank: 0, name: "Orion",  pnl: weeklyBotPnL(-0.4,  38, 2004), winRate: 44.4, trades:  7 + botTradeOffset(2004), colorHex: 0x38D4FF, symbol: "✦"),
+            .init(rank: 0, name: "Cipher", pnl: weeklyBotPnL(-0.9,  48, 2005), winRate: 40.0, trades:  6 + botTradeOffset(2005), colorHex: 0x6D74FF, symbol: "◆"),
+            .init(rank: 0, name: "Atlas",  pnl: weeklyBotPnL(-1.4,  52, 2006), winRate: 37.5, trades:  8 + botTradeOffset(2006), colorHex: 0xF59E0B, symbol: "▲"),
+            .init(rank: 0, name: "Apex",   pnl: weeklyBotPnL(-2.1,  60, 2007), winRate: 33.3, trades:  5 + botTradeOffset(2007), colorHex: 0xFB923C, symbol: "▲"),
+            .init(rank: 0, name: userName, pnl: totalPnL, winRate: winRate * 100,
+                  trades: orders.count, colorHex: 0xB06AFF, symbol: "♛", isMe: true),
+        ]
+        entries.sort { $0.pnl > $1.pnl }
+        return entries.enumerated().map { i, e in
+            LeaderboardEntry(rank: i + 1, name: e.name, pnl: e.pnl, winRate: e.winRate,
+                             trades: e.trades, colorHex: e.colorHex, symbol: e.symbol, isMe: e.isMe)
+        }
+    }
+
+    // MARK: Bot simulation helpers
+
+    /// All-time PnL: base + daily trend since Jan 1 2025 + deterministic daily/hourly noise.
+    private func allTimeBotPnL(_ base: Double, _ dailyDrift: Double, _ vol: Double, _ seed: UInt64) -> Double {
+        let daysSinceEpoch = Date().timeIntervalSince1970 / 86_400
+        let day  = Int(floor(daysSinceEpoch))
+        let hour = Int((daysSinceEpoch - floor(daysSinceEpoch)) * 24)
+        let elapsed     = Double(day - 20_089)  // days since Jan 1 2025
+        let dailyNoise  = botNoise(seed: seed,        day: day, hour: 0)    * vol
+        let hourlyNoise = botNoise(seed: seed &+ 999, day: day, hour: hour) * vol * 0.15
+        return base + dailyDrift * elapsed + dailyNoise + hourlyNoise
+    }
+
+    /// Weekly PnL: resets each Monday, accumulates hourly drift + noise through the week.
+    private func weeklyBotPnL(_ hourlyDrift: Double, _ vol: Double, _ seed: UInt64) -> Double {
+        let now = Date()
+        var cal = Calendar(identifier: .iso8601)
+        cal.timeZone = TimeZone.current
+        let startOfWeek  = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) ?? now
+        let hoursIntoWeek = now.timeIntervalSince(startOfWeek) / 3_600
+        let dayInWeek    = Int(hoursIntoWeek / 24)
+        let hourInWeek   = Int(hoursIntoWeek)
+        let dailyNoise   = botNoise(seed: seed,        day: dayInWeek, hour: 0)         * vol
+        let hourlyNoise  = botNoise(seed: seed &+ 999, day: dayInWeek, hour: hourInWeek) * vol * 0.2
+        return hourlyDrift * hoursIntoWeek + dailyNoise + hourlyNoise
+    }
+
+    /// Deterministic value in [-0.5, 0.5] from seed + day + hour (splitmix64-style hash).
+    private func botNoise(seed: UInt64, day: Int, hour: Int) -> Double {
+        var v = seed
+            &+ UInt64(bitPattern: Int64(day)  &* Int64(2_654_435_761))
+            &+ UInt64(bitPattern: Int64(hour) &* Int64(1_013_904_223))
+        v = (v ^ (v >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        v = (v ^ (v >> 27)) &* 0x94D0_49BB_1331_11EB
+        v =  v ^ (v >> 31)
+        return Double(v >> 11) / Double(1 << 53) - 0.5
+    }
+
+    /// Extra trades that vary day-to-day per bot (0–3 additional trades).
+    private func botTradeOffset(_ seed: UInt64) -> Int {
+        let day = Int(Date().timeIntervalSince1970 / 86_400)
+        var v = seed &+ UInt64(bitPattern: Int64(day) &* Int64(1_000_003))
+        v = (v ^ (v >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        v =  v ^ (v >> 31)
+        return Int(v >> 62)  // 0–3
     }
 
     // MARK: Achievements

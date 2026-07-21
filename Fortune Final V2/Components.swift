@@ -225,5 +225,118 @@ struct FlowLayout: Layout {
     }
 }
 
+// MARK: - Confetti
+
+struct ConfettiView: View {
+    private struct Piece {
+        let xFrac: Double
+        let speed: Double
+        let delay: Double
+        let color: Color
+        let width: CGFloat
+        let height: CGFloat
+        let wobbleFreq: Double
+        let wobbleAmp: Double
+        let rotSpeed: Double
+    }
+
+    @State private var pieces: [Piece] = {
+        let palette: [Color] = [
+            Color(hex: 0xF59E0B), Color(hex: 0x4ADE80), Color(hex: 0x38D4FF),
+            Color(hex: 0xF472B6), Color(hex: 0xB06AFF), Color(hex: 0xFB923C), .white
+        ]
+        return (0..<70).map { i in
+            Piece(
+                xFrac:      Double.random(in: 0...1),
+                speed:      Double.random(in: 180...400),
+                delay:      Double.random(in: 0...2.2),
+                color:      palette[i % palette.count],
+                width:      CGFloat.random(in: 7...14),
+                height:     CGFloat.random(in: 4...8),
+                wobbleFreq: Double.random(in: 1...3),
+                wobbleAmp:  Double.random(in: 8...22),
+                rotSpeed:   Double.random(in: 1.5...4.0) * (i % 2 == 0 ? 1 : -1)
+            )
+        }
+    }()
+
+    @State private var startDate = Date()
+
+    var body: some View {
+        TimelineView(.animation) { tl in
+            Canvas { ctx, size in
+                let elapsed = tl.date.timeIntervalSince(startDate)
+                for p in pieces {
+                    let t = elapsed - p.delay
+                    guard t > 0 else { continue }
+                    let y = CGFloat(t * p.speed) - 20
+                    guard y < size.height + 40 else { continue }
+                    let x = p.xFrac * size.width + CGFloat(sin(t * p.wobbleFreq) * p.wobbleAmp)
+                    let opacity = Double(max(0, min(1, 1.4 - y / size.height)))
+                    let transform = CGAffineTransform(translationX: x, y: y)
+                        .rotated(by: CGFloat(t * p.rotSpeed))
+                    let rect = CGRect(x: -p.width / 2, y: -p.height / 2, width: p.width, height: p.height)
+                    ctx.fill(Path(rect).applying(transform), with: .color(p.color.opacity(opacity)))
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .onAppear { startDate = Date() }
+    }
+}
+
+// MARK: - First Blood banner
+
+struct FirstBloodBanner: View {
+    var onDismiss: () -> Void
+    @State private var visible = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color(hex: 0xF59E0B).opacity(0.18))
+                        .frame(width: 48, height: 48)
+                    Text("⚡")
+                        .font(.system(size: 26))
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("FIRST BLOOD!")
+                        .font(.system(size: 15, weight: .heavy))
+                        .tracking(0.6)
+                        .foregroundStyle(Color(hex: 0xF59E0B))
+                    Text("First trade of the day · +50 XP earned")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(.ultraThinMaterial)
+            .background(Color(hex: 0x111827).opacity(0.88))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color(hex: 0xF59E0B).opacity(0.40), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .shadow(color: Color(hex: 0xF59E0B).opacity(0.30), radius: 24, y: 8)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .offset(y: visible ? 0 : -140)
+            Spacer()
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.68)) { visible = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.4) {
+                withAnimation(.easeIn(duration: 0.35)) { visible = false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { onDismiss() }
+            }
+        }
+    }
+}
+
 // MARK: - Test
 

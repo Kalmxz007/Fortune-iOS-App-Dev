@@ -46,8 +46,19 @@ struct TradeView: View {
                      pe: 0, mktCap: "—", rating: "—", ratingHex: 0x6B7280, sector: "—")
     }
 
-    private var chartPoints: [PricePoint] {
-        model.chartData["\(selectedSymbol)_\(timeframe)"] ?? []
+    // Historical OHLC candles with the last bar updated live from the WebSocket price
+    private var liveCandles: [Candle] {
+        var candles = model.chartData["\(selectedSymbol)_\(timeframe)"] ?? []
+        guard !candles.isEmpty, selected.price > 0 else { return candles }
+        let last = candles[candles.count - 1]
+        candles[candles.count - 1] = Candle(
+            day:   last.day,
+            open:  last.open,
+            high:  max(last.high, selected.price),
+            low:   min(last.low,  selected.price),
+            close: selected.price
+        )
+        return candles
     }
 
     private var filtered: [Stock] {
@@ -113,10 +124,12 @@ struct TradeView: View {
                 await model.refreshPrices()
             }
         }
-        // Refresh chart every 2 minutes (Finnhub 1D uses 5-min bars)
+        // Refresh chart bars from Yahoo Finance every 60 s — restarts automatically on symbol/timeframe change
         .task(id: "\(selectedSymbol)_\(timeframe)") {
-            try? await Task.sleep(for: .seconds(120))
-            await model.refreshChart(symbol: selectedSymbol, timeframe: timeframe)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                await model.refreshChart(symbol: selectedSymbol, timeframe: timeframe)
+            }
         }
         .onChange(of: timeframe) { _, new in
             Task { await model.loadChartData(symbol: selectedSymbol, timeframe: new) }
@@ -244,31 +257,40 @@ struct TradeView: View {
                 Spacer()
             }
 
-            if chartPoints.isEmpty {
+            if liveCandles.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(.white.opacity(0.05))
-                    .frame(height: 80)
+                    .frame(height: 160)
                     .overlay {
                         if model.isLoading {
                             ProgressView().tint(Theme.primary)
                         }
                     }
             } else {
-                Chart(chartPoints) { point in
-                    AreaMark(x: .value("t", point.time), y: .value("price", point.price))
-                        .interpolationMethod(.monotone)
-                        .foregroundStyle(LinearGradient(
-                            colors: [Theme.primary.opacity(0.22), Theme.primary.opacity(0)],
-                            startPoint: .top, endPoint: .bottom))
-                    LineMark(x: .value("t", point.time), y: .value("price", point.price))
-                        .interpolationMethod(.monotone)
-                        .foregroundStyle(Theme.primary)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5))
+                Chart(liveCandles) { candle in
+                    let color: Color = candle.isUp ? Theme.emerald : Theme.red
+                    // Wick: full high-to-low range
+                    RuleMark(
+                        x: .value("t", candle.day),
+                        yStart: .value("Low",  candle.low),
+                        yEnd:   .value("High", candle.high)
+                    )
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .foregroundStyle(color.opacity(0.8))
+                    // Body: open-to-close range
+                    RectangleMark(
+                        x:      .value("t",     candle.day),
+                        yStart: .value("Open",  min(candle.open, candle.close)),
+                        yEnd:   .value("Close", max(candle.open, candle.close)),
+                        width:  .ratio(0.6)
+                    )
+                    .foregroundStyle(color)
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
                 .chartYScale(domain: chartDomain)
-                .frame(height: 80)
+                .frame(height: 160)
+                .animation(.easeInOut(duration: 0.25), value: selected.price)
             }
         }
         .padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 8)
@@ -277,9 +299,10 @@ struct TradeView: View {
     }
 
     private var chartDomain: ClosedRange<Double> {
-        let prices = chartPoints.map(\.price)
-        let lo = prices.min() ?? 0, hi = prices.max() ?? 1
-        let pad = (hi - lo) * 0.15
+        let candles = liveCandles
+        let lo = candles.map(\.low).min()  ?? 0
+        let hi = candles.map(\.high).max() ?? 1
+        let pad = (hi - lo) * 0.08
         return (lo - pad)...(hi + pad)
     }
 

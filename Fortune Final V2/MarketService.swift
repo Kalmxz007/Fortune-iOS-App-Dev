@@ -16,7 +16,8 @@ actor MarketService {
 
     static let watchlist = [
         "AAPL", "NVDA", "MSFT", "TSLA", "AMZN", "META",
-        "GOOGL", "JPM", "AMD", "NFLX", "COIN", "V", "WMT", "INTC", "SPOT", "BABA"
+        "GOOGL", "JPM", "AMD", "NFLX", "COIN", "V", "WMT", "INTC", "SPOT", "BABA",
+        "DIS", "GS", "RIVN", "NIO", "MSTR", "MARA"
     ]
 
     static let timeframes = ["1D", "1W", "1M", "3M"]
@@ -24,23 +25,27 @@ actor MarketService {
     static let sectors = ["All", "Tech", "Finance", "Consumer", "Media", "Crypto", "EV"]
 
     private static let nameMap: [String: String] = [
-        "AAPL": "Apple Inc.",           "NVDA": "NVIDIA Corp.",
-        "MSFT": "Microsoft Corp.",      "TSLA": "Tesla Inc.",
-        "AMZN": "Amazon.com Inc.",      "META": "Meta Platforms",
-        "GOOGL": "Alphabet Inc.",       "JPM":  "JPMorgan Chase",
+        "AAPL": "Apple Inc.",            "NVDA": "NVIDIA Corp.",
+        "MSFT": "Microsoft Corp.",       "TSLA": "Tesla Inc.",
+        "AMZN": "Amazon.com Inc.",       "META": "Meta Platforms",
+        "GOOGL": "Alphabet Inc.",        "JPM":  "JPMorgan Chase",
         "AMD":  "Advanced Micro Devices","NFLX": "Netflix Inc.",
-        "COIN": "Coinbase Global",      "V":    "Visa Inc.",
-        "WMT":  "Walmart Inc.",         "INTC": "Intel Corp.",
-        "SPOT": "Spotify Technology",   "BABA": "Alibaba Group"
+        "COIN": "Coinbase Global",       "V":    "Visa Inc.",
+        "WMT":  "Walmart Inc.",          "INTC": "Intel Corp.",
+        "SPOT": "Spotify Technology",    "BABA": "Alibaba Group",
+        "DIS":  "Walt Disney Co.",       "GS":   "Goldman Sachs",
+        "RIVN": "Rivian Automotive",     "NIO":  "Nio Inc.",
+        "MSTR": "MicroStrategy Inc.",    "MARA": "Marathon Digital"
     ]
 
     private static let sectorMap: [String: String] = [
         "AAPL": "Tech",  "NVDA": "Tech",  "MSFT": "Tech",  "AMD":  "Tech", "INTC": "Tech",
-        "META": "Tech",  "GOOGL":"Tech",  "TSLA": "EV",
+        "META": "Tech",  "GOOGL":"Tech",
+        "TSLA": "EV",    "RIVN": "EV",    "NIO":  "EV",
         "AMZN": "Consumer","WMT":"Consumer","BABA":"Consumer",
-        "NFLX": "Media", "SPOT": "Media",
-        "JPM":  "Finance","V":   "Finance",
-        "COIN": "Crypto"
+        "NFLX": "Media", "SPOT": "Media", "DIS":  "Media",
+        "JPM":  "Finance","V":   "Finance","GS":   "Finance",
+        "COIN": "Crypto", "MSTR":"Crypto", "MARA": "Crypto"
     ]
 
     // MARK: - Public
@@ -111,22 +116,35 @@ actor MarketService {
         }
     }
 
-    func fetchChartData(symbol: String, timeframe: String) async -> [PricePoint] {
-        let now = Int(Date().timeIntervalSince1970)
-        let resolution: String
-        let from: Int
+    /// Fetches full OHLC candle history from the Yahoo Finance chart API (free, no key required).
+    func fetchChartData(symbol: String, timeframe: String) async -> [Candle] {
+        let (interval, range): (String, String)
         switch timeframe {
-        case "1D": resolution = "5";  from = now - 86_400
-        case "1W": resolution = "60"; from = now - 7  * 86_400
-        case "1M": resolution = "D";  from = now - 30 * 86_400
-        case "3M": resolution = "D";  from = now - 90 * 86_400
-        default:   resolution = "D";  from = now - 30 * 86_400
+        case "1D": (interval, range) = ("5m",  "1d")
+        case "1W": (interval, range) = ("60m", "5d")
+        case "1M": (interval, range) = ("1d",  "1mo")
+        case "3M": (interval, range) = ("1d",  "3mo")
+        default:   (interval, range) = ("1d",  "1mo")
         }
+        let urlStr = "https://query1.finance.yahoo.com/v8/finance/chart/\(symbol)"
+            + "?interval=\(interval)&range=\(range)&includePrePost=false"
+        guard let url = URL(string: urlStr) else { return [] }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        // Yahoo requires a browser-like User-Agent or it returns 401
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                         forHTTPHeaderField: "User-Agent")
         do {
-            let raw = try await rawCandles(symbol: symbol, resolution: resolution, from: from, to: now)
-            guard raw.status == "ok", let closes = raw.closes, let timestamps = raw.timestamps else { return [] }
-            return zip(timestamps, closes).map { ts, price in
-                PricePoint(time: Self.label(ts, timeframe: timeframe), price: price)
+            let (data, _) = try await URLSession.shared.data(for: request)
+            let decoded = try JSONDecoder().decode(YahooChartResponse.self, from: data)
+            guard let result = decoded.chart.result?.first,
+                  let timestamps = result.timestamp,
+                  let q = result.indicators.quote.first else { return [] }
+            return zip(timestamps, (0..<timestamps.count)).compactMap { ts, i -> Candle? in
+                guard let o = q.open[i], let h = q.high[i],
+                      let l = q.low[i],  let c = q.close[i] else { return nil }
+                return Candle(day: Self.label(ts, timeframe: timeframe),
+                              open: o, high: h, low: l, close: c)
             }
         } catch { return [] }
     }
@@ -301,6 +319,38 @@ private struct FinnhubCandles: Decodable {
 private struct FinnhubNewsItem: Decodable {
     let headline, source, related: String
     let datetime: Int
+}
+
+// MARK: - Yahoo Finance chart response types
+
+private struct YahooChartResponse: Decodable {
+    let chart: YahooChart
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        chart = try c.decode(YahooChart.self, forKey: .chart)
+    }
+    enum CodingKeys: CodingKey { case chart }
+}
+
+private struct YahooChart: Decodable {
+    let result: [YahooChartResult]?
+}
+
+private struct YahooChartResult: Decodable {
+    let timestamp: [Int]?
+    let indicators: YahooIndicators
+}
+
+private struct YahooIndicators: Decodable {
+    let quote: [YahooQuote]
+}
+
+private struct YahooQuote: Decodable {
+    // Values can be null during market closures / pre/post-hours gaps
+    let open:  [Double?]
+    let high:  [Double?]
+    let low:   [Double?]
+    let close: [Double?]
 }
 
 // MARK: - WebSocket message types

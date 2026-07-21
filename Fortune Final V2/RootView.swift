@@ -55,6 +55,14 @@ struct MainShell: View {
                 FortuneTabBar()
             }
 
+            // First Blood celebration: confetti + banner on first trade of the day
+            if model.showFirstBloodCelebration {
+                ConfettiView()
+                    .zIndex(100)
+                FirstBloodBanner { model.showFirstBloodCelebration = false }
+                    .zIndex(101)
+            }
+
             // Global trade confirmation toast — sits above the tab bar
             if confirmVisible, let msg = model.tradeConfirmation {
                 let isWin = msg.contains("+")
@@ -75,6 +83,10 @@ struct MainShell: View {
             }
         }
         .background(Theme.background)
+        .sheet(isPresented: Binding(get: { model.showTutorial },
+                                    set: { model.showTutorial = $0 })) {
+            TutorialView()
+        }
         .onChange(of: model.tradeConfirmation) { _, new in
             guard new != nil else { return }
             withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) { confirmVisible = true }

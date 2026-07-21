@@ -342,6 +342,11 @@ struct AccountView: View {
             NavRow(icon: "lock", label: "Privacy", detail: "Manage your data")
             rowDivider
             NavRow(icon: "info.circle", label: "About Fortune", detail: "v2.0 · Stock Simulator")
+            rowDivider
+            Button { model.showTutorial = true } label: {
+                NavRow(icon: "questionmark.circle", label: "How to Use Fortune", detail: "Step-by-step tutorial")
+            }
+            .buttonStyle(.plain)
         }
     }
 

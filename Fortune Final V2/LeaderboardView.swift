@@ -47,7 +47,7 @@ struct LeaderboardView: View {
                         columnHeader.padding(.bottom, 6)
                         Rectangle().fill(.white.opacity(0.07)).frame(height: 1).padding(.bottom, 6)
                         VStack(spacing: 4) {
-                            ForEach(model.leaderboard) { entry in
+                            ForEach(timeframe == .allTime ? model.leaderboard : model.weeklyLeaderboard) { entry in
                                 row(entry)
                             }
                         }
@@ -58,6 +58,13 @@ struct LeaderboardView: View {
                 FortuneFooter().padding(.bottom, 12)
             }
             .padding(.horizontal, 20)
+        }
+        .task {
+            // Re-evaluate bot PnLs every 60 seconds so values change while the view is open.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                model.leaderboardRefreshTick += 1
+            }
         }
     }
 
@@ -166,7 +173,7 @@ struct LeaderboardView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
 
-            Text("+$\(e.pnl.money())")
+            Text("\(e.pnl >= 0 ? "+" : "-")$\(abs(e.pnl).money())")
                 .font(.mono(12, weight: .semibold)).foregroundStyle(e.pnl >= 0 ? Theme.green : Theme.red)
                 .frame(width: cols[2], alignment: .trailing)
             Text(e.winRate > 0 ? "\(e.winRate.money(1))%" : "—")

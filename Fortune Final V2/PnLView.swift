@@ -153,19 +153,31 @@ struct PnLView: View {
                         }
                     }
             } else {
+                let lineColor = model.totalPnL >= 0 ? Theme.green : Theme.red
                 Chart {
                     ForEach(model.pnlCandles) { candle in
-                        RuleMark(x: .value("Day", candle.day),
-                                 yStart: .value("Low",  candle.low),
-                                 yEnd:   .value("High", candle.high))
-                            .foregroundStyle(candle.isUp ? Theme.green : Theme.red)
-                            .lineStyle(StrokeStyle(lineWidth: 1))
-                        RectangleMark(x:      .value("Day",   candle.day),
-                                      yStart: .value("Open",  candle.open),
-                                      yEnd:   .value("Close", candle.close),
-                                      width:  .ratio(0.55))
-                            .foregroundStyle((candle.isUp ? Theme.green : Theme.red).opacity(0.9))
+                        AreaMark(
+                            x: .value("Day", candle.day),
+                            y: .value("PnL", candle.close)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(
+                            LinearGradient(
+                                colors: [lineColor.opacity(0.25), lineColor.opacity(0.0)],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        )
+                        LineMark(
+                            x: .value("Day", candle.day),
+                            y: .value("PnL", candle.close)
+                        )
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(lineColor)
+                        .lineStyle(StrokeStyle(lineWidth: 2))
                     }
+                    RuleMark(y: .value("Zero", 0))
+                        .foregroundStyle(.white.opacity(0.08))
+                        .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
                     RuleMark(y: .value("Current", model.totalPnL))
                         .foregroundStyle(Theme.primary.opacity(0.3))
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
