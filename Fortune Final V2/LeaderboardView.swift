@@ -21,11 +21,25 @@ struct LeaderboardView: View {
         let icon: String, title: String, detail: String, xp: Int, progress: Int, total: Int
         var done: Bool { progress >= total }
     }
-    private let challenges: [Challenge] = [
-        .init(icon: "⚡", title: "First Blood",   detail: "Place your first trade today",    xp: 50,  progress: 1, total: 1),
-        .init(icon: "📊", title: "Diversify",     detail: "Hold 3 different stocks at once", xp: 100, progress: 2, total: 3),
-        .init(icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",     xp: 200, progress: 1, total: 3),
-    ]
+    /// Progress is derived from the user's real activity.
+    private var challenges: [Challenge] {
+        [
+            .init(icon: "⚡", title: "First Blood",   detail: "Place your first trade today",    xp: 50,
+                  progress: model.hasTradeToday() ? 1 : 0, total: 1),
+            .init(icon: "📊", title: "Diversify",     detail: "Hold 3 different stocks at once", xp: 100,
+                  progress: min(model.holdings.count, 3), total: 3),
+            .init(icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",     xp: 200,
+                  progress: min(model.greenClosesToday, 3), total: 3),
+        ]
+    }
+
+    /// Time remaining until local midnight, when daily challenges reset.
+    private var resetCountdown: String {
+        let now = Date()
+        let midnight = Calendar.current.startOfDay(for: now).addingTimeInterval(86_400)
+        let mins = max(0, Int(midnight.timeIntervalSince(now) / 60))
+        return "Resets in \(mins / 60)h \(mins % 60)m"
+    }
 
     var body: some View {
         ZStack {
@@ -76,7 +90,7 @@ struct LeaderboardView: View {
                 Text("DAILY CHALLENGES").font(.system(size: 11, weight: .bold)).tracking(0.6)
                     .foregroundStyle(.white.opacity(0.4))
                 Spacer()
-                Text("Resets in 11h 24m").font(.mono(10)).foregroundStyle(Color(hex: 0xF59E0B))
+                Text(resetCountdown).font(.mono(10)).foregroundStyle(Color(hex: 0xF59E0B))
             }
             ForEach(challenges, id: \.title) { c in
                 HStack(spacing: 12) {

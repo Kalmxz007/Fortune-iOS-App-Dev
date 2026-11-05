@@ -102,10 +102,29 @@ actor MarketService {
         }
     }
 
+    /// Phase 1 load: fetches price + daily change only — 1 call per symbol (22 total).
+    /// Reliably stays under Finnhub's free-tier 60 calls/minute limit.
     func fetchStocks() async -> [Stock] {
         await withTaskGroup(of: Stock?.self) { group in
             for symbol in Self.watchlist {
-                group.addTask { await self.buildStock(symbol: symbol) }
+                group.addTask {
+                    guard let q = try? await self.rawQuote(symbol: symbol) else { return nil }
+                    return Stock(
+                        symbol:    symbol,
+                        name:      Self.nameMap[symbol] ?? symbol,
+                        price:     q.current,
+                        change:    q.change,
+                        pct:       q.percentChange,
+                        volume:    "—",
+                        high52:    max(q.high, q.current),
+                        low52:     min(q.low,  q.current),
+                        pe:        0,
+                        mktCap:    "—",
+                        rating:    "—",
+                        ratingHex: 0x6B7280,
+                        sector:    Self.sectorMap[symbol] ?? "Other"
+                    )
+                }
             }
             var result: [Stock] = []
             for await s in group { if let s { result.append(s) } }
@@ -114,6 +133,25 @@ actor MarketService {
                 (Self.watchlist.firstIndex(of: $1.symbol) ?? 0)
             }
         }
+    }
+
+    /// Phase 2 enrichment: fetches 52w range, P/E, market cap, and analyst rating for ONE symbol.
+    /// Call this in batches after the initial stock list has already loaded.
+    func enrichStock(symbol: String) async -> (mktCap: String, pe: Double, high52: Double, low52: Double, rating: String, ratingHex: UInt)? {
+        do {
+            async let m = rawMetrics(symbol: symbol)
+            async let r = rawRecommendations(symbol: symbol)
+            let (metrics, recs) = try await (m, r)
+            let (rating, ratingHex) = resolveRating(recs)
+            return (
+                mktCap:    formatMarketCap(metrics.metric.marketCapitalization),
+                pe:        metrics.metric.peExclExtraTTM ?? 0,
+                high52:    metrics.metric.week52High ?? 0,
+                low52:     metrics.metric.week52Low  ?? 0,
+                rating:    rating,
+                ratingHex: ratingHex
+            )
+        } catch { return nil }
     }
 
     /// Fetches full OHLC candle history from the Yahoo Finance chart API (free, no key required).
@@ -140,7 +178,9 @@ actor MarketService {
             guard let result = decoded.chart.result?.first,
                   let timestamps = result.timestamp,
                   let q = result.indicators.quote.first else { return [] }
-            return zip(timestamps, (0..<timestamps.count)).compactMap { ts, i -> Candle? in
+            let count = [timestamps.count, q.open.count, q.high.count, q.low.count, q.close.count].min() ?? 0
+            return (0..<count).compactMap { i -> Candle? in
+                let ts = timestamps[i]
                 guard let o = q.open[i], let h = q.high[i],
                       let l = q.low[i],  let c = q.close[i] else { return nil }
                 return Candle(day: Self.label(ts, timeframe: timeframe),
@@ -165,33 +205,6 @@ actor MarketService {
         } catch { return [] }
     }
 
-    // MARK: - Stock builder
-
-    private func buildStock(symbol: String) async -> Stock? {
-        do {
-            async let q = rawQuote(symbol: symbol)
-            async let m = rawMetrics(symbol: symbol)
-            async let r = rawRecommendations(symbol: symbol)
-            let (quote, metrics, recs) = try await (q, m, r)
-            let (rating, ratingHex) = resolveRating(recs)
-            return Stock(
-                symbol:    symbol,
-                name:      Self.nameMap[symbol] ?? symbol,
-                price:     quote.current,
-                change:    quote.change,
-                pct:       quote.percentChange,
-                volume:    "—",
-                high52:    metrics.metric.week52High ?? max(quote.high, quote.current),
-                low52:     metrics.metric.week52Low  ?? min(quote.low,  quote.current),
-                pe:        metrics.metric.peExclExtraTTM ?? 0,
-                mktCap:    formatMarketCap(metrics.metric.marketCapitalization),
-                rating:    rating,
-                ratingHex: ratingHex,
-                sector:    Self.sectorMap[symbol] ?? "Other"
-            )
-        } catch { return nil }
-    }
-
     private func resolveRating(_ recs: [FinnhubRecommendation]) -> (String, UInt) {
         guard let r = recs.first else { return ("N/A", 0x6B7280) }
         let total = r.strongBuy + r.buy + r.hold + r.sell + r.strongSell
@@ -212,22 +225,30 @@ actor MarketService {
         return String(format: "%.0fM", v)
     }
 
+    private static let dayTimeFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm";     return f }()
+    private static let weekFormatter:    DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f }()
+    private static let monthFormatter:   DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d";     return f }()
+
+    /// Chart x-axis label. Must be unique per bar, since Charts treats it as a category.
     private static func label(_ ts: Int, timeframe: String) -> String {
-        let d   = Date(timeIntervalSince1970: TimeInterval(ts))
-        let fmt = DateFormatter()
+        let d = Date(timeIntervalSince1970: TimeInterval(ts))
         switch timeframe {
-        case "1D": fmt.dateFormat = "HH:mm"
-        case "1W": fmt.dateFormat = "EEE"
-        default:   fmt.dateFormat = "MMM d"
+        case "1D": return dayTimeFormatter.string(from: d)
+        case "1W": return weekFormatter.string(from: d)
+        default:   return monthFormatter.string(from: d)
         }
-        return fmt.string(from: d)
     }
 
     // MARK: - Raw network
 
     private func rawQuote(symbol: String) async throws -> FinnhubQuote {
-        let (data, _) = try await URLSession.shared.data(from: endpoint("/quote", ["symbol": symbol]))
-        return try JSONDecoder().decode(FinnhubQuote.self, from: data)
+        let (data, response) = try await URLSession.shared.data(from: endpoint("/quote", ["symbol": symbol]))
+        // Finnhub returns 429 + an error body when rate-limited. The lenient decoder would turn
+        // that into a $0 quote, which would wipe prices and falsely trigger stop losses.
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw URLError(.badServerResponse) }
+        let quote = try JSONDecoder().decode(FinnhubQuote.self, from: data)
+        guard quote.current > 0 else { throw URLError(.cannotParseResponse) }
+        return quote
     }
 
     private func rawMetrics(symbol: String) async throws -> FinnhubMetricsResponse {
@@ -358,6 +379,13 @@ private struct YahooQuote: Decodable {
 private struct WSTradeMessage: Decodable {
     let type: String
     let data: [WSTrade]?
+
+    nonisolated init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = (try? c.decode(String.self, forKey: .type)) ?? ""
+        data = try? c.decode([WSTrade].self, forKey: .data)
+    }
+    enum CodingKeys: CodingKey { case type, data }
 
     struct WSTrade: Decodable {
         let s: String   // symbol

@@ -15,10 +15,9 @@ struct PnLView: View {
     @State private var closingSymbol:   String?  = nil
     @State private var sellTarget:      Holding? = nil
     @State private var showSellSheet             = false
-    @State private var alertVisible              = false
 
-    private var yScale: ClosedRange<Double> {
-        let values = model.pnlCandles.flatMap { [$0.high, $0.low] }
+    private func yScale(for candles: [Candle]) -> ClosedRange<Double> {
+        let values = candles.flatMap { [$0.high, $0.low] }
         guard !values.isEmpty else { return -1000...2000 }
         let lo  = values.min()!
         let hi  = values.max()!
@@ -47,29 +46,6 @@ struct PnLView: View {
                 }
                 .padding(.horizontal, 22).padding(.bottom, 20)
             }
-
-            // SL/TP alert toast
-            if alertVisible, let msg = model.lastAlert {
-                Text(msg)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(.ultraThinMaterial)
-                    .background(msg.contains("Stop Loss") ? Theme.red.opacity(0.7) : Theme.emerald.opacity(0.7))
-                    .clipShape(Capsule())
-                    .shadow(radius: 8)
-                    .padding(.top, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(10)
-            }
-        }
-        .onChange(of: model.lastAlert) { _, new in
-            guard new != nil else { return }
-            withAnimation(.spring(response: 0.4)) { alertVisible = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
-                withAnimation { alertVisible = false }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { model.lastAlert = nil }
-            }
         }
         .sheet(isPresented: $showSellSheet) {
             if let h = sellTarget {
@@ -82,13 +58,6 @@ struct PnLView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Theme.background)
                 .presentationCornerRadius(24)
-            }
-        }
-        // Keep unrealized PnL current while this tab is visible
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
-                await model.refreshQuotes()
             }
         }
     }
@@ -141,8 +110,10 @@ struct PnLView: View {
     // MARK: Candlestick chart
 
     private var chart: some View {
-        Group {
-            if model.pnlCandles.isEmpty {
+        // Computed once per render — pnlCandles replays the whole order history
+        let candles = model.pnlCandles
+        return Group {
+            if candles.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(.white.opacity(0.04))
                     .overlay {
@@ -155,7 +126,7 @@ struct PnLView: View {
             } else {
                 let lineColor = model.totalPnL >= 0 ? Theme.green : Theme.red
                 Chart {
-                    ForEach(model.pnlCandles) { candle in
+                    ForEach(candles) { candle in
                         AreaMark(
                             x: .value("Day", candle.day),
                             y: .value("PnL", candle.close)
@@ -186,7 +157,7 @@ struct PnLView: View {
                                 .font(.mono(8)).foregroundStyle(Theme.primary)
                         }
                 }
-                .chartYScale(domain: yScale)
+                .chartYScale(domain: yScale(for: candles))
                 .chartXAxis {
                     AxisMarks(values: .automatic(desiredCount: 4)) {
                         AxisValueLabel().font(.mono(8)).foregroundStyle(.white.opacity(0.22))
@@ -221,8 +192,9 @@ struct PnLView: View {
             statCell("Trades",       "\(model.orders.count)", .white.opacity(0.95))
             divider
             let pf: String = {
-                guard model.closedTradeCount > 0 && model.realizedPnL != 0 else { return "—" }
-                return String(format: "%.2f×", abs(model.realizedPnL / max(1, Double(model.closedTradeCount))))
+                guard model.closedTradeCount > 0 else { return "—" }
+                let avg = model.realizedPnL / Double(model.closedTradeCount)
+                return "\(avg >= 0 ? "+" : "-")$\(abs(avg).money(0))"
             }()
             statCell("Avg Trade",    pf, Theme.accent)
         }
@@ -256,7 +228,7 @@ struct PnLView: View {
                     perfCell("Worst Position",
                              worst.map { h in "\(h.pnl >= 0 ? "+" : "")$\(abs(h.pnl).money(0))" } ?? "—",
                              worst?.symbol ?? "—", Theme.red)
-                    perfCell("Win Streak", "\(model.winCount) 🔥", "All time", Color(hex: 0xF59E0B))
+                    perfCell("Win Streak", "\(model.currentWinStreak) 🔥", "Best: \(model.bestWinStreak)", Color(hex: 0xF59E0B))
                 }
             }
         }

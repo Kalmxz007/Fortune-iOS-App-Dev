@@ -26,6 +26,7 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .tint(Theme.primary)
         .task { await model.loadMarketData() }
+        .task { await model.syncNotificationAuthorization() }
     }
 }
 
@@ -34,6 +35,7 @@ struct RootView: View {
 struct MainShell: View {
     @Environment(AppModel.self) private var model
     @State private var confirmVisible = false
+    @State private var alertVisible   = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -63,6 +65,24 @@ struct MainShell: View {
                     .zIndex(101)
             }
 
+            // Global SL/TP + price alert toast — shown on every tab, not just Portfolio
+            if alertVisible, let msg = model.lastAlert {
+                VStack {
+                    Text(msg)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.ultraThinMaterial)
+                        .background(msg.contains("Stop Loss") ? Theme.red.opacity(0.7) : Theme.emerald.opacity(0.7))
+                        .clipShape(Capsule())
+                        .shadow(radius: 8)
+                        .padding(.top, 60)
+                    Spacer()
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(98)
+            }
+
             // Global trade confirmation toast — sits above the tab bar
             if confirmVisible, let msg = model.tradeConfirmation {
                 let isWin = msg.contains("+")
@@ -86,6 +106,22 @@ struct MainShell: View {
         .sheet(isPresented: Binding(get: { model.showTutorial },
                                     set: { model.showTutorial = $0 })) {
             TutorialView()
+        }
+        // Keep live prices running across ALL tabs, not just Trade
+        .task { await model.startLivePriceStream() }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                await model.refreshPrices()
+            }
+        }
+        .onChange(of: model.lastAlert) { _, new in
+            guard new != nil else { return }
+            withAnimation(.spring(response: 0.4)) { alertVisible = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                withAnimation { alertVisible = false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { model.lastAlert = nil }
+            }
         }
         .onChange(of: model.tradeConfirmation) { _, new in
             guard new != nil else { return }

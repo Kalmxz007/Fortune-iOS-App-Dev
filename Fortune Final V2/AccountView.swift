@@ -14,12 +14,11 @@ struct AccountView: View {
     @State private var confirmResetPortfolio = false
     @State private var showRiskOptions = false
     @State private var showStopLossOptions = false
+    @State private var showPrivacyPolicy = false
     @State private var toggles = Toggles()
 
     struct Toggles {
-        var stockAlerts = true
         var watchlistSync = true
-        var pushNotifs = true
     }
 
     private var initials: String {
@@ -105,7 +104,7 @@ struct AccountView: View {
             }
         } message: {
             Text("Are you sure You want to sign out. You will be returned to the onboarding screen. Your current portfolio data and progress will NOT be saved and a new account will be generated")
-        }
+        }                              
         .alert("Choose Risk Level", isPresented: $showRiskOptions) {
             Button("Conservative") { model.updateRisk("conservative") }
             Button("Balanced") { model.updateRisk("balanced") }
@@ -122,6 +121,9 @@ struct AccountView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("New buy orders will prefill stop loss using this percentage below the entry price.")
+        }
+        .sheet(isPresented: $showPrivacyPolicy) {
+            PrivacyPolicyView()
         }
     }
 
@@ -235,7 +237,7 @@ struct AccountView: View {
                 statCard("Total P&L", pnlStr, "All time", pnl >= 0 ? Theme.green : Theme.destructive)
 
                 let wr = model.winRate
-                let wrStr = model.closedTradeCount > 0 ? String(format: "%.1f%%", wr) : "—"
+                let wrStr = model.closedTradeCount > 0 ? String(format: "%.1f%%", wr * 100) : "—"
                 let wrSub = model.closedTradeCount > 0 ? "\(model.closedTradeCount) trades" : "No trades yet"
                 statCard("Win Rate", wrStr, wrSub, Theme.primary)
 
@@ -297,7 +299,15 @@ struct AccountView: View {
 
     private var tradingSection: some View {
         section("Trading") {
-            ToggleRow(icon: "chart.line.uptrend.xyaxis", label: "Stock Alerts", detail: "Price movement notifications", isOn: $toggles.stockAlerts)
+            ToggleRow(
+                icon: "chart.line.uptrend.xyaxis",
+                label: "Stock Alerts",
+                detail: "Notify on big moves & stop-loss hits",
+                isOn: Binding(
+                    get: { model.stockAlertsEnabled },
+                    set: { model.updateStockAlertsEnabled($0) }
+                )
+            )
             rowDivider
             ToggleRow(icon: "star", label: "Watchlist Sync", detail: "Sync starred stocks across devices", isOn: $toggles.watchlistSync)
             rowDivider
@@ -315,7 +325,15 @@ struct AccountView: View {
 
     private var notificationsSection: some View {
         section("Notifications") {
-            ToggleRow(icon: "bell", label: "Push Notifications", detail: "Alerts and market updates", isOn: $toggles.pushNotifs)
+            ToggleRow(
+                icon: "bell",
+                label: "Push Notifications",
+                detail: "Alerts and market updates",
+                isOn: Binding(
+                    get: { model.notificationsEnabled },
+                    set: { newValue in Task { await model.setNotificationsEnabled(newValue) } }
+                )
+            )
             rowDivider
             ToggleRow(
                 icon: "newspaper",
@@ -327,7 +345,15 @@ struct AccountView: View {
                 )
             )
             rowDivider
-            NavRow(icon: "bolt", label: "XP Milestones", detail: "Notify when you level up")
+            ToggleRow(
+                icon: "bolt",
+                label: "XP Milestones",
+                detail: "Notify when you level up",
+                isOn: Binding(
+                    get: { model.xpMilestonesEnabled },
+                    set: { model.updateXPMilestonesEnabled($0) }
+                )
+            )
         }
     }
 
@@ -337,9 +363,12 @@ struct AccountView: View {
                 Text("Saved").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.emerald)
             }
             rowDivider
-            NavRow(icon: "trophy", label: "Leaderboard Profile", detail: "Public · Global rank #4")
+            NavRow(icon: "trophy", label: "Leaderboard Profile", detail: "Public · Global rank \(myLeaderboardRank.map { "#\($0)" } ?? "—")")
             rowDivider
-            NavRow(icon: "lock", label: "Privacy", detail: "Manage your data")
+            Button { showPrivacyPolicy = true } label: {
+                NavRow(icon: "lock", label: "Privacy", detail: "Manage your data")
+            }
+            .buttonStyle(.plain)
             rowDivider
             NavRow(icon: "info.circle", label: "About Fortune", detail: "v2.0 · Stock Simulator")
             rowDivider
@@ -438,6 +467,83 @@ private struct NavRow: View {
     }
 }
 
+
+// MARK: - Privacy Policy
+
+struct PrivacyPolicyView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private struct Section {
+        let title: String
+        let body: String
+    }
+
+    private let sections: [Section] = [
+        .init(title: "Overview",
+              body: "Fortune is a stock market simulator for educational and entertainment purposes only. No real money is ever involved, and no real trades are placed. This policy explains what data the app handles and how."),
+        .init(title: "Data We Store",
+              body: "Your profile, portfolio, trade history, XP, achievements, and app preferences are saved locally on your device only. Fortune does not maintain user accounts on a server, and this data never leaves your device unless you back it up through iCloud yourself."),
+        .init(title: "Market Data",
+              body: "Live prices, quotes, company fundamentals, and news are fetched from third-party providers (Finnhub and Yahoo Finance) to power charts and stock information. The app only requests public market data — it does not share any of your personal or portfolio information with these providers."),
+        .init(title: "Analytics & Tracking",
+              body: "Fortune does not include advertising, and does not sell or share your data with advertisers. The app does not track you across other apps or websites."),
+        .init(title: "Notifications",
+              body: "If you enable notifications, they are used only to deliver in-app alerts such as price movements, market updates, and XP milestones. You can turn these off at any time in Settings."),
+        .init(title: "Your Control",
+              body: "Because all of your data lives on your device, you can erase it at any time by resetting your mock portfolio, signing out, or deleting the app. Signing out generates a fresh account and clears your current progress."),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "lock.shield")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Theme.primary)
+                            .frame(width: 48, height: 48)
+                            .background(LinearGradient(colors: [Theme.primary.opacity(0.18), Theme.accent.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.indigo.opacity(0.3)))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Privacy Policy").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.foreground)
+                            Text("Last updated July 2026").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                        }
+                    }
+                    .padding(.top, 8)
+
+                    ForEach(sections, id: \.title) { s in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(s.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.foreground)
+                            Text(s.body).font(.system(size: 13)).foregroundStyle(Theme.mutedForeground)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .lineSpacing(3)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Theme.card).overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.border))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                    }
+
+                    Text("Fortune · No real money involved").font(.system(size: 11)).foregroundStyle(Theme.mutedForeground)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4).padding(.bottom, 24)
+                }
+                .padding(.horizontal, 16)
+            }
+            .background(Theme.background)
+            .navigationTitle("Privacy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(Theme.primary)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
 
 #Preview {
     AccountView().environment(AppModel())

@@ -19,7 +19,6 @@ struct TradeView: View {
     @State private var sector            = "All"
     @State private var sortBy:           SortOption = .default_
     @State private var moversTab:        MoversTab  = .gainers
-    @State private var alerts:           [PriceAlert] = []
     @State private var appliedPrefs      = false
 
     @State private var showOrderSheet  = false
@@ -115,15 +114,6 @@ struct TradeView: View {
             }
             await model.loadChartData(symbol: selectedSymbol, timeframe: timeframe)
         }
-        // WebSocket: real-time prices pushed by Finnhub (no rate-limit cost)
-        .task { await model.startLivePriceStream() }
-        // REST fallback every 60 s — keeps change/pct accurate if WS is quiet
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(60))
-                await model.refreshPrices()
-            }
-        }
         // Refresh chart bars from Yahoo Finance every 60 s — restarts automatically on symbol/timeframe change
         .task(id: "\(selectedSymbol)_\(timeframe)") {
             while !Task.isCancelled {
@@ -163,7 +153,9 @@ struct TradeView: View {
             .presentationCornerRadius(24)
         }
         .sheet(isPresented: $showAlertsSheet) {
-            PriceAlertsSheet(alerts: $alerts, stocks: model.stocks)
+            PriceAlertsSheet(alerts: Binding(get: { model.priceAlerts },
+                                             set: { model.priceAlerts = $0 }),
+                             stocks: model.stocks)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(Theme.background)
@@ -218,10 +210,10 @@ struct TradeView: View {
                                 ZStack(alignment: .topTrailing) {
                                     Image(systemName: "bell")
                                         .font(.system(size: 14))
-                                        .foregroundStyle(alerts.isEmpty ? Color.white.opacity(0.3) : Theme.primary)
+                                        .foregroundStyle(model.priceAlerts.isEmpty ? Color.white.opacity(0.3) : Theme.primary)
                                         .padding(2)
-                                    if !alerts.isEmpty {
-                                        Text("\(alerts.count)")
+                                    if !model.priceAlerts.isEmpty {
+                                        Text("\(model.priceAlerts.count)")
                                             .font(.system(size: 8, weight: .bold)).foregroundStyle(.white)
                                             .frame(width: 14, height: 14)
                                             .background(Theme.primary).clipShape(Circle())
@@ -558,6 +550,14 @@ struct TradeView: View {
                 Text("Loading live data…").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
             }
             .frame(maxWidth: .infinity).padding(.vertical, 40)
+        } else if model.stocks.isEmpty {
+            VStack(spacing: 10) {
+                Image(systemName: "wifi.exclamationmark").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
+                Text("Couldn't load market data").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                Button("Retry") { Task { await model.loadMarketData() } }
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.primary)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 40)
         } else if filtered.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
@@ -565,6 +565,8 @@ struct TradeView: View {
             }
             .frame(maxWidth: .infinity).padding(.vertical, 40)
         } else {
+            // Computed once instead of re-deriving holdings for every row
+            let ownedSymbols = Set(model.holdings.map(\.symbol))
             ForEach(filtered) { stock in
                 HStack(spacing: 0) {
                     Button {
@@ -572,7 +574,7 @@ struct TradeView: View {
                         showOrderSheet = true
                     } label: {
                         HStack(spacing: 12) {
-                            let owned = model.holdings.first(where: { $0.symbol == stock.symbol }) != nil
+                            let owned = ownedSymbols.contains(stock.symbol)
                             ZStack(alignment: .topTrailing) {
                                 Text(stock.symbol)
                                     .font(.mono(12, weight: .semibold))
@@ -783,7 +785,6 @@ private struct OrderSheet: View {
                             }
                         }
                         Spacer()
-                        let gain = (stock.price - (stock.price * 0.97)) * Double(qty) // rough estimate
                         Text("Est. proceeds: $\((Double(qty) * stock.price).money())")
                             .font(.mono(11)).foregroundStyle(Theme.mutedForeground)
                     }
@@ -1007,7 +1008,7 @@ private struct PriceAlertsSheet: View {
                     .background(Theme.secondary).overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     Button {
-                        guard !target.isEmpty else { return }
+                        guard Double(target) != nil else { return }
                         withAnimation { alerts.append(PriceAlert(symbol: symbol, target: target, above: above)) }
                         target = ""
                     } label: {
@@ -1016,7 +1017,7 @@ private struct PriceAlertsSheet: View {
                             .background(LinearGradient(colors: [Theme.primary, Theme.indigo], startPoint: .leading, endPoint: .trailing))
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                     }
-                    .disabled(target.isEmpty).opacity(target.isEmpty ? 0.3 : 1)
+                    .disabled(Double(target) == nil).opacity(Double(target) == nil ? 0.3 : 1)
                 }
             }
             .padding(12).background(Theme.card).overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.border))
