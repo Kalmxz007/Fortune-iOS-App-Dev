@@ -27,6 +27,7 @@ struct RootView: View {
         .tint(Theme.primary)
         .task { await model.loadMarketData() }
         .task { await model.syncNotificationAuthorization() }
+        .task { await model.observeCloudWatchlist() }
     }
 }
 

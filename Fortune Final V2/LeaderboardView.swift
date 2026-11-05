@@ -17,22 +17,6 @@ struct LeaderboardView: View {
 
     private let cols: [CGFloat] = [28, 0, 92, 60, 46]
 
-    private struct Challenge {
-        let icon: String, title: String, detail: String, xp: Int, progress: Int, total: Int
-        var done: Bool { progress >= total }
-    }
-    /// Progress is derived from the user's real activity.
-    private var challenges: [Challenge] {
-        [
-            .init(icon: "⚡", title: "First Blood",   detail: "Place your first trade today",    xp: 50,
-                  progress: model.hasTradeToday() ? 1 : 0, total: 1),
-            .init(icon: "📊", title: "Diversify",     detail: "Hold 3 different stocks at once", xp: 100,
-                  progress: min(model.holdings.count, 3), total: 3),
-            .init(icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",     xp: 200,
-                  progress: min(model.greenClosesToday, 3), total: 3),
-        ]
-    }
-
     /// Time remaining until local midnight, when daily challenges reset.
     private var resetCountdown: String {
         let now = Date()
@@ -92,7 +76,7 @@ struct LeaderboardView: View {
                 Spacer()
                 Text(resetCountdown).font(.mono(10)).foregroundStyle(Color(hex: 0xF59E0B))
             }
-            ForEach(challenges, id: \.title) { c in
+            ForEach(model.dailyChallenges) { c in
                 HStack(spacing: 12) {
                     Text(c.icon).font(.system(size: 18))
                     VStack(alignment: .leading, spacing: 5) {

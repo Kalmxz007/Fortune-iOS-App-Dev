@@ -105,6 +105,12 @@ private struct PersistedState: Codable {
     var winCount:         Int
     var closedTradeCount: Int
     var closedTrades:     [ClosedTrade]
+    var priceAlerts:      [PriceAlert]?
+    var bonusXP:          Int?
+    var challengeDay:     String?
+    var awardedChallenges: [String]?
+    var starredSymbols:   [String]?
+    var watchlistSyncEnabled: Bool?
 }
 
 // MARK: - App state
@@ -157,6 +163,16 @@ final class AppModel {
     // User-created price alerts; each fires once when its target is crossed, then is removed
     var priceAlerts: [PriceAlert] = []
 
+    // XP earned from daily challenges, plus which challenges were already awarded on `challengeDay`
+    var bonusXP = 0
+    private var challengeDay = ""
+    private var awardedChallenges: Set<String> = []
+
+    // Starred stocks, optionally synced across devices via iCloud key-value storage
+    var starredSymbols: [String] = []
+    var watchlistSyncEnabled = true
+    private static let cloudWatchlistKey = "starredSymbols"
+
     // Price direction tracking: populated before each quote refresh
     var previousPrices:      [String: Double] = [:]
     var isRefreshingPrices   = false
@@ -170,6 +186,7 @@ final class AppModel {
     private let priceAlertThresholdPct = 5.0
 
     private static let storeKey = "fortune_state_v1"
+    private static let dayKeyFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
     private static let dayLabelFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d"; return f }()
 
     init() { load() }
@@ -218,7 +235,7 @@ final class AppModel {
     // MARK: Gamification (derived from real activity)
 
     var totalXP: Int {
-        closedTradeCount * 200 + winCount * 100 + max(0, Int(realizedPnL / 100))
+        closedTradeCount * 200 + winCount * 100 + max(0, Int(realizedPnL / 100)) + bonusXP
     }
     var level: Int { max(1, 1 + totalXP / 1_000) }
     var xpInCurrentLevel: Int { totalXP % 1_000 }
@@ -259,7 +276,13 @@ final class AppModel {
             realizedPnL:      realizedPnL,
             winCount:         winCount,
             closedTradeCount: closedTradeCount,
-            closedTrades:     closedTrades
+            closedTrades:     closedTrades,
+            priceAlerts:      priceAlerts,
+            bonusXP:          bonusXP,
+            challengeDay:     challengeDay,
+            awardedChallenges: Array(awardedChallenges),
+            starredSymbols:   starredSymbols,
+            watchlistSyncEnabled: watchlistSyncEnabled
         )
         if let data = try? JSONEncoder().encode(state) {
             UserDefaults.standard.set(data, forKey: Self.storeKey)
@@ -291,6 +314,12 @@ final class AppModel {
         winCount         = state.winCount
         closedTradeCount = state.closedTradeCount
         closedTrades     = state.closedTrades
+        priceAlerts      = state.priceAlerts ?? []
+        bonusXP          = state.bonusXP ?? 0
+        challengeDay     = state.challengeDay ?? ""
+        awardedChallenges = Set(state.awardedChallenges ?? [])
+        starredSymbols   = state.starredSymbols ?? []
+        watchlistSyncEnabled = state.watchlistSyncEnabled ?? true
     }
 
     // MARK: Onboarding
@@ -319,6 +348,9 @@ final class AppModel {
         realizedPnL      = 0
         winCount         = 0
         closedTradeCount = 0
+        bonusXP          = 0
+        awardedChallenges.removeAll()
+        priceAlerts.removeAll()
         balance = startingCapital
         onboarded = true
         if experience == "beginner" || experience == "intermediate" {
@@ -418,6 +450,7 @@ final class AppModel {
         guard !fired.isEmpty else { return }
         let firedIDs = Set(fired.map(\.id))
         priceAlerts.removeAll { firedIDs.contains($0.id) }
+        save()
         for alert in fired {
             let dir = alert.above ? "above" : "below"
             lastAlert = "🔔 \(alert.symbol) is \(dir) $\(alert.target)"
@@ -437,6 +470,7 @@ final class AppModel {
         realizedPnL      = 0
         winCount         = 0
         closedTradeCount = 0
+        bonusXP          = 0
         tradeConfirmation = nil
         lastAlert         = nil
         save()
@@ -477,7 +511,7 @@ final class AppModel {
     func placeOrder(_ order: TradeOrder) {
         let cost = Double(order.qty) * order.entryPrice
         let levelBefore = level
-        let isFirstTodayBuy = order.side == .buy && !hasTradeToday()
+        let isFirstTradeToday = !hasTradeToday()
         if order.side == .buy {
             guard balance >= cost else { return }
             balance -= cost
@@ -507,7 +541,8 @@ final class AppModel {
                 : "Sold \(order.symbol) · -$\(String(format: "%.2f", abs(realized)))"
         }
         orders.insert(order, at: 0)
-        if isFirstTodayBuy { showFirstBloodCelebration = true }
+        if isFirstTradeToday { showFirstBloodCelebration = true }
+        awardCompletedChallenges()
         notifyIfLeveledUp(from: levelBefore)
         save()
     }
@@ -580,8 +615,101 @@ final class AppModel {
                 body: "Sold \(holding.shares) share\(holding.shares == 1 ? "" : "s") @ $\(String(format: "%.2f", price)) · \(pnlStr)"
             )
         }
+        awardCompletedChallenges()
         notifyIfLeveledUp(from: levelBefore)
         save()
+    }
+
+    // MARK: Daily challenges
+
+    struct DailyChallenge: Identifiable {
+        let id: String
+        let icon: String, title: String, detail: String
+        let xp: Int, progress: Int, total: Int
+        var done: Bool { progress >= total }
+    }
+
+    /// Challenge progress, derived from the user's real activity today.
+    var dailyChallenges: [DailyChallenge] {
+        [
+            .init(id: "firstBlood", icon: "⚡", title: "First Blood",   detail: "Place your first trade today",
+                  xp: 50,  progress: hasTradeToday() ? 1 : 0, total: 1),
+            .init(id: "diversify",  icon: "📊", title: "Diversify",     detail: "Hold 3 different stocks at once",
+                  xp: 100, progress: min(holdings.count, 3), total: 3),
+            .init(id: "profitStreak", icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",
+                  xp: 200, progress: min(greenClosesToday, 3), total: 3),
+        ]
+    }
+
+    /// Grants XP once per day for each newly completed challenge. Caller saves.
+    private func awardCompletedChallenges() {
+        let today = Self.dayKeyFormatter.string(from: Date())
+        if challengeDay != today {
+            challengeDay = today
+            awardedChallenges.removeAll()
+        }
+        for c in dailyChallenges where c.done && !awardedChallenges.contains(c.id) {
+            awardedChallenges.insert(c.id)
+            bonusXP += c.xp
+        }
+    }
+
+    // MARK: Watchlist (starred stocks)
+
+    func isStarred(_ symbol: String) -> Bool { starredSymbols.contains(symbol) }
+
+    func toggleStar(_ symbol: String) {
+        if let i = starredSymbols.firstIndex(of: symbol) {
+            starredSymbols.remove(at: i)
+        } else {
+            starredSymbols.append(symbol)
+        }
+        save()
+        pushWatchlistToCloud()
+    }
+
+    func setWatchlistSyncEnabled(_ isEnabled: Bool) {
+        watchlistSyncEnabled = isEnabled
+        save()
+        if isEnabled {
+            // Merge rather than overwrite, so stars from either device aren't lost
+            pullWatchlistFromCloud()
+            pushWatchlistToCloud()
+        }
+    }
+
+    private func pushWatchlistToCloud() {
+        guard watchlistSyncEnabled else { return }
+        let store = NSUbiquitousKeyValueStore.default
+        store.set(starredSymbols, forKey: Self.cloudWatchlistKey)
+        store.synchronize()
+    }
+
+    /// Merges stars saved in iCloud (from this or another device) into the local list.
+    func pullWatchlistFromCloud() {
+        guard watchlistSyncEnabled else { return }
+        let cloud = NSUbiquitousKeyValueStore.default.array(forKey: Self.cloudWatchlistKey) as? [String] ?? []
+        let merged = starredSymbols + cloud.filter { !starredSymbols.contains($0) }
+        guard merged != starredSymbols else { return }
+        starredSymbols = merged
+        save()
+    }
+
+    /// Listens for iCloud changes pushed from the user's other devices. Call from a long-lived Task.
+    func observeCloudWatchlist() async {
+        NSUbiquitousKeyValueStore.default.synchronize()
+        pullWatchlistFromCloud()
+        let changes = NotificationCenter.default.notifications(
+            named: NSUbiquitousKeyValueStore.didChangeExternallyNotification)
+        for await _ in changes {
+            // Cloud is the source of truth for remote changes (including un-starring elsewhere)
+            guard watchlistSyncEnabled else { continue }
+            let cloud = NSUbiquitousKeyValueStore.default.array(forKey: Self.cloudWatchlistKey) as? [String] ?? []
+            if cloud != starredSymbols {
+                starredSymbols = cloud
+                save()
+            }
+        }
     }
 
     // MARK: Data loading
@@ -968,10 +1096,14 @@ final class AppModel {
     }
 
     private var afterHoursTrades: Int {
-        let cal = Calendar.current
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/New_York") ?? .current
         return orders.filter { o in
-            let h = cal.component(.hour, from: o.date)
-            return h < 9 || h >= 16
+            let c = cal.dateComponents([.weekday, .hour, .minute], from: o.date)
+            guard let weekday = c.weekday, let hour = c.hour, let minute = c.minute else { return false }
+            if weekday == 1 || weekday == 7 { return true }   // Sunday / Saturday
+            let minutes = hour * 60 + minute
+            return minutes < 9 * 60 + 30 || minutes >= 16 * 60
         }.count
     }
 
@@ -1030,8 +1162,8 @@ struct NewsItem: Identifiable {
     let bullish:  Bool
 }
 
-struct PriceAlert: Identifiable {
-    let id = UUID()
+struct PriceAlert: Identifiable, Codable {
+    var id = UUID()
     let symbol: String
     let target: String
     let above:  Bool

@@ -38,6 +38,12 @@ struct TradeView: View {
     }
     enum MoversTab { case gainers, losers }
 
+    /// Pseudo-sector chip that filters to the user's starred stocks.
+    private static let starredFilter = "★ Starred"
+    private var filterChips: [String] {
+        [MarketService.sectors[0], Self.starredFilter] + MarketService.sectors.dropFirst()
+    }
+
     private var selected: Stock {
         model.stocks.first { $0.symbol == selectedSymbol }
             ?? Stock(symbol: selectedSymbol, name: selectedSymbol, price: 0,
@@ -62,7 +68,10 @@ struct TradeView: View {
 
     private var filtered: [Stock] {
         model.stocks
-            .filter { sector == "All" || $0.sector == sector }
+            .filter {
+                sector == "All"
+                    || (sector == Self.starredFilter ? model.isStarred($0.symbol) : $0.sector == sector)
+            }
             .filter {
                 search.isEmpty
                     || $0.symbol.localizedCaseInsensitiveContains(search)
@@ -154,7 +163,7 @@ struct TradeView: View {
         }
         .sheet(isPresented: $showAlertsSheet) {
             PriceAlertsSheet(alerts: Binding(get: { model.priceAlerts },
-                                             set: { model.priceAlerts = $0 }),
+                                             set: { model.priceAlerts = $0; model.save() }),
                              stocks: model.stocks)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -454,7 +463,7 @@ struct TradeView: View {
     private var sectorFilters: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(MarketService.sectors, id: \.self) { s in
+                ForEach(filterChips, id: \.self) { s in
                     let on = sector == s
                     Button { sector = s } label: {
                         Text(s)
@@ -561,7 +570,10 @@ struct TradeView: View {
         } else if filtered.isEmpty {
             VStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").font(.system(size: 20)).foregroundStyle(.white.opacity(0.25))
-                Text("No results for \"\(search)\"").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                Text(sector == Self.starredFilter && search.isEmpty
+                     ? "No starred stocks yet — tap ☆ on any stock"
+                     : "No results for \"\(search)\"")
+                    .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
             }
             .frame(maxWidth: .infinity).padding(.vertical, 40)
         } else {
@@ -625,6 +637,16 @@ struct TradeView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+
+                    Button {
+                        withAnimation(.spring(response: 0.3)) { model.toggleStar(stock.symbol) }
+                    } label: {
+                        Image(systemName: model.isStarred(stock.symbol) ? "star.fill" : "star")
+                            .font(.system(size: 15))
+                            .foregroundStyle(model.isStarred(stock.symbol) ? Color(hex: 0xF59E0B) : .white.opacity(0.4))
+                            .padding(.leading, 10)
+                    }
+                    .accessibilityLabel(model.isStarred(stock.symbol) ? "Unstar \(stock.symbol)" : "Star \(stock.symbol)")
 
                     Button {
                         selectedSymbol  = stock.symbol
@@ -869,6 +891,7 @@ private struct StockDetailSheet: View {
     let stock:   Stock
     let onTrade: () -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -886,6 +909,14 @@ private struct StockDetailSheet: View {
                     Text(stock.name).font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
                 }
                 Spacer()
+                Button { model.toggleStar(stock.symbol) } label: {
+                    Image(systemName: model.isStarred(stock.symbol) ? "star.fill" : "star")
+                        .font(.system(size: 14))
+                        .foregroundStyle(model.isStarred(stock.symbol) ? Color(hex: 0xF59E0B) : Theme.mutedForeground)
+                        .frame(width: 32, height: 32).background(Theme.card)
+                        .overlay(Circle().stroke(Theme.border)).clipShape(Circle())
+                }
+                .accessibilityLabel(model.isStarred(stock.symbol) ? "Unstar" : "Star")
                 Button { dismiss() } label: {
                     Image(systemName: "xmark").font(.system(size: 14)).foregroundStyle(Theme.mutedForeground)
                         .frame(width: 32, height: 32).background(Theme.card)

@@ -15,11 +15,6 @@ struct AccountView: View {
     @State private var showRiskOptions = false
     @State private var showStopLossOptions = false
     @State private var showPrivacyPolicy = false
-    @State private var toggles = Toggles()
-
-    struct Toggles {
-        var watchlistSync = true
-    }
 
     private var initials: String {
         let letters = model.userName.split(separator: " ").compactMap(\.first)
@@ -309,7 +304,15 @@ struct AccountView: View {
                 )
             )
             rowDivider
-            ToggleRow(icon: "star", label: "Watchlist Sync", detail: "Sync starred stocks across devices", isOn: $toggles.watchlistSync)
+            ToggleRow(
+                icon: "star",
+                label: "Watchlist Sync",
+                detail: "Sync starred stocks via iCloud",
+                isOn: Binding(
+                    get: { model.watchlistSyncEnabled },
+                    set: { model.setWatchlistSyncEnabled($0) }
+                )
+            )
             rowDivider
             Button { showRiskOptions = true } label: {
                 NavRow(icon: "waveform.path.ecg", label: "Risk Level", detail: riskLabel)
