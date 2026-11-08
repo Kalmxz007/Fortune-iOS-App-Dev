@@ -144,6 +144,18 @@ The tests cover cost basis, realized P&L, stop-loss / take-profit execution, win
 
 ---
 
+## How This Was Built
+
+Fortune was built as a group project with AI pair-programming, using Claude as a coding assistant (credited as a co-author on the commits where it helped).
+
+**My role:** We came up with the concept and decided what the app should do: the trading features, the gamification, the onboarding flow, and the look and feel. I directed each change, tested the app on the simulator, reported bugs I found, and reviewed the code before committing.
+
+**Claude's role:** writing and refactoring much of the Swift code, tracking down bugs, and writing unit tests and documentation from my direction.
+
+**What I learned:** SwiftUI state management with `@Observable`, Swift Concurrency (actors, task groups, async streams), working within a real API's rate limits, and how to structure code so it can be unit tested.
+
+---
+
 ## Disclaimer
 
 Fortune is a simulator for educational and entertainment purposes. No real money is involved and no real trades are placed. Market data is provided by third parties and may be delayed or inaccurate.
