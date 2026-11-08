@@ -173,6 +173,10 @@ final class AppModel {
     var watchlistSyncEnabled = true
     private static let cloudWatchlistKey = "starredSymbols"
 
+    // Trade screen filters, kept here so they survive switching tabs (nil = use onboarding defaults)
+    var tradeSector:    String? = nil
+    var tradeTimeframe: String? = nil
+
     // Price direction tracking: populated before each quote refresh
     var previousPrices:      [String: Double] = [:]
     var isRefreshingPrices   = false
@@ -186,10 +190,14 @@ final class AppModel {
     private let priceAlertThresholdPct = 5.0
 
     private static let storeKey = "fortune_state_v1"
+    private let defaults: UserDefaults
     private static let dayKeyFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
     private static let dayLabelFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d"; return f }()
 
-    init() { load() }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        load()
+    }
 
     // MARK: Derived preferences
 
@@ -285,12 +293,12 @@ final class AppModel {
             watchlistSyncEnabled: watchlistSyncEnabled
         )
         if let data = try? JSONEncoder().encode(state) {
-            UserDefaults.standard.set(data, forKey: Self.storeKey)
+            defaults.set(data, forKey: Self.storeKey)
         }
     }
 
     private func load() {
-        guard let data  = UserDefaults.standard.data(forKey: Self.storeKey),
+        guard let data  = defaults.data(forKey: Self.storeKey),
               let state = try? JSONDecoder().decode(PersistedState.self, from: data)
         else { return }
         onboarded        = state.onboarded
@@ -440,7 +448,7 @@ final class AppModel {
     }
 
     /// Fires and removes any price alerts whose target has been crossed.
-    private func checkPriceAlerts() {
+    func checkPriceAlerts() {
         guard !priceAlerts.isEmpty else { return }
         let fired = priceAlerts.filter { alert in
             guard let target = Double(alert.target),
@@ -476,11 +484,6 @@ final class AppModel {
         save()
     }
 
-    /// Returns whether the user can afford to buy qty shares at price.
-    func canAfford(qty: Int, price: Double) -> Bool {
-        balance >= Double(qty) * price
-    }
-
     /// Sell an entire open holding at the current live price.
     func closePosition(_ holding: Holding) {
         let price = stocks.first { $0.symbol == holding.symbol }?.price ?? holding.current
@@ -496,14 +499,6 @@ final class AppModel {
         placeOrder(TradeOrder(symbol: holding.symbol, name: holding.symbol,
                               side: .sell, qty: shares, entryPrice: price,
                               stopLoss: "", takeProfit: ""))
-    }
-
-    /// Remove a pending buy from history, refunding the balance.
-    func cancelOrder(_ order: TradeOrder) {
-        let cost = Double(order.qty) * order.entryPrice
-        if order.side == .buy { balance += cost }
-        orders.removeAll { $0.id == order.id }
-        save()
     }
 
     // MARK: Order placement
@@ -726,7 +721,14 @@ final class AppModel {
         // Stocks appear in the UI within ~1-2 seconds.
         async let baseStocks = MarketService.shared.fetchStocks()
         async let newsItems  = MarketService.shared.fetchNewsItems()
-        let (fetched, fetchedNews) = await (baseStocks, newsItems)
+        var (fetched, fetchedNews) = await (baseStocks, newsItems)
+
+        // The first requests after launch occasionally fail (network not ready yet);
+        // retry with a short backoff before showing the error state.
+        for attempt in 1...2 where fetched.isEmpty && !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Double(attempt) * 1.5))
+            fetched = await MarketService.shared.fetchStocks()
+        }
 
         if !fetched.isEmpty    { stocks = fetched    }
         if !fetchedNews.isEmpty { news  = fetchedNews }
@@ -813,11 +815,6 @@ final class AppModel {
             // Stream ended (disconnect/error) — wait 3 s then reconnect
             try? await Task.sleep(for: .seconds(3))
         }
-    }
-
-    func refreshQuotes() async {
-        // Delegates to refreshPrices so enriched fields (52w, PE, rating) are preserved
-        await refreshPrices()
     }
 
     /// Lightweight price-only refresh — 1 API call per symbol instead of 3.
@@ -1096,15 +1093,18 @@ final class AppModel {
     }
 
     private var afterHoursTrades: Int {
+        orders.filter { Self.isOutsideMarketHours($0.date) }.count
+    }
+
+    /// True outside regular NYSE hours: Mon–Fri 9:30–16:00 New York time.
+    static func isOutsideMarketHours(_ date: Date) -> Bool {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "America/New_York") ?? .current
-        return orders.filter { o in
-            let c = cal.dateComponents([.weekday, .hour, .minute], from: o.date)
-            guard let weekday = c.weekday, let hour = c.hour, let minute = c.minute else { return false }
-            if weekday == 1 || weekday == 7 { return true }   // Sunday / Saturday
-            let minutes = hour * 60 + minute
-            return minutes < 9 * 60 + 30 || minutes >= 16 * 60
-        }.count
+        let c = cal.dateComponents([.weekday, .hour, .minute], from: date)
+        guard let weekday = c.weekday, let hour = c.hour, let minute = c.minute else { return false }
+        if weekday == 1 || weekday == 7 { return true }   // Sunday / Saturday
+        let minutes = hour * 60 + minute
+        return minutes < 9 * 60 + 30 || minutes >= 16 * 60
     }
 
 }
@@ -1133,12 +1133,6 @@ struct Stock: Identifiable, Hashable {
         guard high52 > low52 else { return 0 }
         return (price - low52) / (high52 - low52)
     }
-}
-
-struct PricePoint: Identifiable {
-    let time: String
-    let price: Double
-    var id: String { time }
 }
 
 struct Holding: Identifiable {

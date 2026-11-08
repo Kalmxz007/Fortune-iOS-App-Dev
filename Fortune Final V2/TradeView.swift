@@ -30,8 +30,8 @@ struct TradeView: View {
         var label: String {
             switch self {
             case .default_: "Default"
-            case .gainers:  "↑ Top Gainers"
-            case .losers:   "↓ Top Losers"
+            case .gainers:  "↑ Gainers"
+            case .losers:   "↓ Losers"
             case .price:    "Price"
             }
         }
@@ -88,9 +88,9 @@ struct TradeView: View {
     }
 
     private var movers: [Stock] {
-        let sorted = model.stocks.sorted {
-            moversTab == .gainers ? $0.pct > $1.pct : $0.pct < $1.pct
-        }
+        let sorted = model.stocks
+            .filter { moversTab == .gainers ? $0.pct > 0 : $0.pct < 0 }
+            .sorted { moversTab == .gainers ? $0.pct > $1.pct : $0.pct < $1.pct }
         return Array(sorted.prefix(4))
     }
 
@@ -112,11 +112,18 @@ struct TradeView: View {
         .background(Theme.background)
         .task {
             if model.stocks.isEmpty { await model.loadMarketData() }
-            // Apply onboarding preferences once on first load
+            // Restore filters from earlier in this session, or apply onboarding preferences the first time
             if !appliedPrefs {
-                timeframe = model.defaultTimeframe
-                if let match = MarketService.sectors.first(where: { model.preferredSectors.contains($0) }) {
-                    sector = match
+                if let savedSector = model.tradeSector, let savedTimeframe = model.tradeTimeframe {
+                    sector    = savedSector
+                    timeframe = savedTimeframe
+                } else {
+                    timeframe = model.defaultTimeframe
+                    if let match = MarketService.sectors.first(where: { model.preferredSectors.contains($0) }) {
+                        sector = match
+                    }
+                    model.tradeSector    = sector
+                    model.tradeTimeframe = timeframe
                 }
                 if model.defaultSortLabel == "gainers" { sortBy = .gainers }
                 appliedPrefs = true
@@ -131,7 +138,11 @@ struct TradeView: View {
             }
         }
         .onChange(of: timeframe) { _, new in
+            if appliedPrefs { model.tradeTimeframe = new }
             Task { await model.loadChartData(symbol: selectedSymbol, timeframe: new) }
+        }
+        .onChange(of: sector) { _, new in
+            if appliedPrefs { model.tradeSector = new }
         }
         .onChange(of: selectedSymbol) { _, new in
             Task { await model.loadChartData(symbol: new, timeframe: timeframe) }
@@ -315,7 +326,7 @@ struct TradeView: View {
                 SectionLabel(text: "My Positions")
                 Spacer()
                 let totalUnrealized = model.unrealizedPnL
-                Text("\(totalUnrealized >= 0 ? "+" : "")$\(abs(totalUnrealized).money(0))")
+                Text(totalUnrealized.signedMoney(0))
                     .font(.mono(11, weight: .semibold))
                     .foregroundStyle(totalUnrealized >= 0 ? Theme.emerald : Theme.red)
                     .contentTransition(.numericText(countsDown: totalUnrealized < 0))
@@ -353,12 +364,12 @@ struct TradeView: View {
 
                     // Live P&L
                     VStack(alignment: .trailing, spacing: 2) {
-                        Text("\(h.pnl >= 0 ? "+" : "-")$\(abs(h.pnl).money(0))")
+                        Text(h.pnl.signedMoney(0))
                             .font(.mono(12, weight: .bold))
                             .foregroundStyle(h.pnl >= 0 ? Theme.emerald : Theme.red)
                             .contentTransition(.numericText(countsDown: h.pnl < 0))
                             .animation(.spring(response: 0.4), value: h.pnl)
-                        Text("\(h.pct >= 0 ? "+" : "")\(String(format: "%.2f", h.pct))%")
+                        Text(h.pct.signedPercent())
                             .font(.system(size: 10))
                             .foregroundStyle(h.pnl >= 0 ? Theme.emerald.opacity(0.7) : Theme.red.opacity(0.7))
                     }
@@ -491,6 +502,8 @@ struct TradeView: View {
                 Button { sortBy = opt } label: {
                     Text(opt.label)
                         .font(.system(size: 10, weight: .semibold))
+                        .lineLimit(1)
+                        .fixedSize()
                         .foregroundStyle(on ? Color(hex: 0xA5B4FC) : .white.opacity(0.3))
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(on ? Theme.indigo.opacity(0.2) : .clear)
@@ -611,7 +624,9 @@ struct TradeView: View {
                                         .background(.white.opacity(0.05))
                                         .overlay(Capsule().stroke(.white.opacity(0.08)))
                                         .clipShape(Capsule())
-                                    Text(stock.volume).font(.mono(10)).foregroundStyle(Theme.mutedForeground)
+                                    if stock.volume != "—" {
+                                        Text(stock.volume).font(.mono(10)).foregroundStyle(Theme.mutedForeground)
+                                    }
                                 }
                             }
                             Spacer(minLength: 8)

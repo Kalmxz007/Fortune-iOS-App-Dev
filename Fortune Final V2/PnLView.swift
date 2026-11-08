@@ -84,7 +84,7 @@ struct PnLView: View {
             Text("COMBINED PNL").font(.system(size: 11, weight: .medium)).tracking(0.6)
                 .foregroundStyle(.white.opacity(0.35)).padding(.bottom, 6)
             let pnl = model.totalPnL
-            Text("\(pnl >= 0 ? "+" : "")$\(abs(pnl).money())")
+            Text(pnl.signedMoney())
                 .font(.mono(42, weight: .bold)).foregroundStyle(pnl >= 0 ? Theme.green : Theme.red)
                 .contentTransition(.numericText(countsDown: pnl < 0))
                 .animation(.spring(response: 0.4), value: pnl)
@@ -92,7 +92,7 @@ struct PnLView: View {
             HStack(spacing: 8) {
                 HStack(spacing: 3) {
                     Image(systemName: pnl >= 0 ? "arrow.up.right" : "arrow.down.right").font(.system(size: 11, weight: .bold))
-                    Text("\(pct >= 0 ? "+" : "")\(String(format: "%.2f", pct))%").font(.system(size: 12, weight: .semibold))
+                    Text(pct.signedPercent()).font(.system(size: 12, weight: .semibold))
                 }
                 .foregroundStyle(pnl >= 0 ? Theme.green : Theme.red)
                 .padding(.horizontal, 10).padding(.vertical, 3)
@@ -110,8 +110,10 @@ struct PnLView: View {
     // MARK: Candlestick chart
 
     private var chart: some View {
-        // Computed once per render — pnlCandles replays the whole order history
-        let candles = model.pnlCandles
+        // Computed once per render — pnlCandles replays the whole order history.
+        // A $0 "Start" point anchors the curve so a single day of trades still draws a line.
+        let dayCandles = model.pnlCandles
+        let candles = dayCandles.isEmpty ? [] : [Candle(day: "Start", open: 0, high: 0, low: 0, close: 0)] + dayCandles
         return Group {
             if candles.isEmpty {
                 RoundedRectangle(cornerRadius: 4)
@@ -152,10 +154,6 @@ struct PnLView: View {
                     RuleMark(y: .value("Current", model.totalPnL))
                         .foregroundStyle(Theme.primary.opacity(0.3))
                         .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
-                        .annotation(position: .trailing, alignment: .leading) {
-                            Text(model.totalPnL >= 0 ? "+\(Int(model.totalPnL / 1000))k" : "\(Int(model.totalPnL / 1000))k")
-                                .font(.mono(8)).foregroundStyle(Theme.primary)
-                        }
                 }
                 .chartYScale(domain: yScale(for: candles))
                 .chartXAxis {
@@ -169,7 +167,7 @@ struct PnLView: View {
                             .foregroundStyle(.white.opacity(0.05))
                         AxisValueLabel {
                             if let v = value.as(Double.self) {
-                                Text(v == 0 ? "0" : "\(v > 0 ? "+" : "")\(Int(v / 1000))k")
+                                Text(axisLabel(v))
                                     .font(.mono(8)).foregroundStyle(.white.opacity(0.25))
                             }
                         }
@@ -179,13 +177,21 @@ struct PnLView: View {
         }
     }
 
+    /// Compact signed axis label: "+$250" under $1k, "+1.2k" above.
+    private func axisLabel(_ v: Double) -> String {
+        if abs(v) < 0.5 { return "0" }
+        let sign = v > 0 ? "+" : "-"
+        if abs(v) < 1_000 { return "\(sign)$\(Int(abs(v).rounded()))" }
+        return "\(sign)\((abs(v) / 1_000).money(1))k"
+    }
+
     // MARK: Stats row
 
     private var statsRow: some View {
         HStack(spacing: 0) {
-            statCell("Realized",     "\(model.realizedPnL >= 0 ? "+" : "")$\(abs(model.realizedPnL).money(0))", model.realizedPnL >= 0 ? Theme.green : Theme.red, first: true)
+            statCell("Realized",     model.realizedPnL.signedMoney(0), model.realizedPnL >= 0 ? Theme.green : Theme.red, first: true)
             divider
-            statCell("Unrealized",   "\(model.unrealizedPnL >= 0 ? "+" : "")$\(abs(model.unrealizedPnL).money(0))", model.unrealizedPnL >= 0 ? Theme.green : Theme.red)
+            statCell("Unrealized",   model.unrealizedPnL.signedMoney(0), model.unrealizedPnL >= 0 ? Theme.green : Theme.red)
             divider
             statCell("Win Rate",     model.closedTradeCount > 0 ? "\(String(format: "%.1f", model.winRate * 100))%" : "—", .white.opacity(0.95))
             divider
@@ -223,11 +229,11 @@ struct PnLView: View {
                 let worst = model.holdings.min(by: { $0.pnl < $1.pnl })
                 HStack(spacing: 8) {
                     perfCell("Best Position",
-                             best.map { h in "\(h.pnl >= 0 ? "+" : "")$\(abs(h.pnl).money(0))" } ?? "—",
-                             best?.symbol ?? "—", Theme.green)
+                             best.map { $0.pnl.signedMoney(0) } ?? "—",
+                             best?.symbol ?? "—", (best?.pnl ?? 0) >= 0 ? Theme.green : Theme.red)
                     perfCell("Worst Position",
-                             worst.map { h in "\(h.pnl >= 0 ? "+" : "")$\(abs(h.pnl).money(0))" } ?? "—",
-                             worst?.symbol ?? "—", Theme.red)
+                             worst.map { $0.pnl.signedMoney(0) } ?? "—",
+                             worst?.symbol ?? "—", (worst?.pnl ?? 0) >= 0 ? Theme.green : Theme.red)
                     perfCell("Win Streak", "\(model.currentWinStreak) 🔥", "Best: \(model.bestWinStreak)", Color(hex: 0xF59E0B))
                 }
             }
@@ -316,7 +322,7 @@ struct PnLView: View {
                                         Text(h.symbol).font(.mono(13, weight: .bold)).foregroundStyle(.white.opacity(0.9))
                                         Text("\(h.shares) sh").font(.system(size: 10)).foregroundStyle(.white.opacity(0.3))
                                         Spacer()
-                                        Text("\(h.pnl >= 0 ? "+" : "-")$\(abs(h.pnl).money(0))")
+                                        Text(h.pnl.signedMoney(0))
                                             .font(.mono(13, weight: .bold)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
                                             .contentTransition(.numericText(countsDown: h.pnl < 0))
                                             .animation(.spring(response: 0.4), value: h.pnl)
@@ -333,7 +339,7 @@ struct PnLView: View {
                                                 }
                                         }
                                         .frame(height: 3)
-                                        Text("\(h.pct.signPrefix)\(String(format: "%.2f", h.pct))%")
+                                        Text(h.pct.signedPercent())
                                             .font(.mono(10)).foregroundStyle(h.pnl >= 0 ? Theme.green : Theme.red)
                                     }
                                     HStack {
@@ -393,10 +399,10 @@ struct PnLView: View {
                             }
                             Spacer()
                             VStack(alignment: .trailing, spacing: 2) {
-                                Text("\(trade.isWin ? "+" : "-")$\(abs(trade.pnl).money(0))")
+                                Text(trade.pnl.signedMoney(0))
                                     .font(.mono(12, weight: .bold))
                                     .foregroundStyle(trade.isWin ? Theme.green : Theme.red)
-                                Text("\(trade.pct >= 0 ? "+" : "")\(String(format: "%.1f", trade.pct))%")
+                                Text(trade.pct.signedPercent(1))
                                     .font(.system(size: 10))
                                     .foregroundStyle(trade.isWin ? Theme.green.opacity(0.7) : Theme.red.opacity(0.7))
                             }
@@ -557,7 +563,7 @@ private struct PartialSellSheet: View {
                 Spacer()
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("Est. P&L").font(.system(size: 11)).foregroundStyle(.white.opacity(0.3))
-                    Text("\(estimatedPnL >= 0 ? "+" : "-")$\(abs(estimatedPnL).money())")
+                    Text(estimatedPnL.signedMoney())
                         .font(.mono(15, weight: .bold))
                         .foregroundStyle(estimatedPnL >= 0 ? Theme.green : Theme.red)
                 }

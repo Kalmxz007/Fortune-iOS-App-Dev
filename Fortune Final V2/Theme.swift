@@ -82,4 +82,21 @@ extension Double {
     }
 
     var signPrefix: String { self >= 0 ? "+" : "" }
+
+    /// Signed dollar amount, e.g. "+$12.50" / "-$3.10". Values that round to
+    /// zero render unsigned ("$0") so we never show "-$0".
+    func signedMoney(_ decimals: Int = 2) -> String {
+        let scale = pow(10, Double(decimals))
+        let rounded = (self * scale).rounded() / scale
+        if rounded == 0 { return "$\(0.0.money(decimals))" }
+        return "\(rounded > 0 ? "+" : "-")$\(abs(rounded).money(decimals))"
+    }
+
+    /// Signed percentage, e.g. "+1.25%" / "-0.40%", with no "-0.00%".
+    func signedPercent(_ decimals: Int = 2) -> String {
+        let scale = pow(10, Double(decimals))
+        let rounded = (self * scale).rounded() / scale
+        if rounded == 0 { return "\(0.0.money(decimals))%" }
+        return "\(rounded > 0 ? "+" : "")\(rounded.money(decimals))%"
+    }
 }

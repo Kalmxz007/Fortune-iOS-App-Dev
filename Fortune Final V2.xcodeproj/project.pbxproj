@@ -7,10 +7,16 @@
 	objects = {
 
 /* Begin PBXFileReference section */
+		296E2030309CF9570097569B /* FortuneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = FortuneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2983FC323000351B00020533 /* Fortune Final V2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Fortune Final V2.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		296E2031309CF9570097569B /* FortuneTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = FortuneTests;
+			sourceTree = "<group>";
+		};
 		2983FC343000351B00020533 /* Fortune Final V2 */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Fortune Final V2";
@@ -19,6 +25,13 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		296E202D309CF9570097569B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2983FC2F3000351B00020533 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -33,6 +46,7 @@
 			isa = PBXGroup;
 			children = (
 				2983FC343000351B00020533 /* Fortune Final V2 */,
+				296E2031309CF9570097569B /* FortuneTests */,
 				2983FC333000351B00020533 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +55,7 @@
 			isa = PBXGroup;
 			children = (
 				2983FC323000351B00020533 /* Fortune Final V2.app */,
+				296E2030309CF9570097569B /* FortuneTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,6 +63,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		296E202F309CF9570097569B /* FortuneTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 296E2034309CF9570097569B /* Build configuration list for PBXNativeTarget "FortuneTests" */;
+			buildPhases = (
+				296E202C309CF9570097569B /* Sources */,
+				296E202D309CF9570097569B /* Frameworks */,
+				296E202E309CF9570097569B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				296E2031309CF9570097569B /* FortuneTests */,
+			);
+			name = FortuneTests;
+			packageProductDependencies = (
+			);
+			productName = FortuneTests;
+			productReference = 296E2030309CF9570097569B /* FortuneTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		2983FC313000351B00020533 /* Fortune Final V2 */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 2983FC3D3000351C00020533 /* Build configuration list for PBXNativeTarget "Fortune Final V2" */;
@@ -77,9 +114,12 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2660;
+				LastSwiftUpdateCheck = 2720;
 				LastUpgradeCheck = 2660;
 				TargetAttributes = {
+					296E202F309CF9570097569B = {
+						CreatedOnToolsVersion = 27.2;
+					};
 					2983FC313000351B00020533 = {
 						CreatedOnToolsVersion = 26.6;
 						LastSwiftMigration = 2660;
@@ -101,11 +141,19 @@
 			projectRoot = "";
 			targets = (
 				2983FC313000351B00020533 /* Fortune Final V2 */,
+				296E202F309CF9570097569B /* FortuneTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		296E202E309CF9570097569B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2983FC303000351B00020533 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -116,6 +164,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		296E202C309CF9570097569B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		2983FC2E3000351B00020533 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -126,6 +181,56 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		296E2035309CF9570097569B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.2;
+				MACOSX_DEPLOYMENT_TARGET = 27.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yourcompany.FortuneTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Fortune Final V2.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Fortune Final V2";
+				XROS_DEPLOYMENT_TARGET = 27.2;
+			};
+			name = Debug;
+		};
+		296E2036309CF9570097569B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.2;
+				MACOSX_DEPLOYMENT_TARGET = 27.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.yourcompany.FortuneTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx xros xrsimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Fortune Final V2.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Fortune Final V2";
+				XROS_DEPLOYMENT_TARGET = 27.2;
+			};
+			name = Release;
+		};
 		2983FC3B3000351C00020533 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -276,7 +381,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Fortune Final V2/Fortune Final V2-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
@@ -313,7 +417,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "Fortune Final V2/Fortune Final V2-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -323,6 +426,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		296E2034309CF9570097569B /* Build configuration list for PBXNativeTarget "FortuneTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				296E2035309CF9570097569B /* Debug */,
+				296E2036309CF9570097569B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		2983FC2D3000351B00020533 /* Build configuration list for PBXProject "Fortune Final V2" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

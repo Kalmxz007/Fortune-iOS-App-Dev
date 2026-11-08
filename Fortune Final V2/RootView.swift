@@ -172,7 +172,7 @@ private struct HeaderBar: View {
                             .contentTransition(.numericText())
                             .animation(.spring(response: 0.4), value: totalValue)
                         if !model.holdings.isEmpty {
-                            Text("\(totalChange >= 0 ? "+" : "")\(totalChange.money(0))")
+                            Text(totalChange.signedMoney(0))
                                 .font(.mono(9))
                                 .foregroundStyle(totalChange >= 0 ? Theme.emerald.opacity(0.7) : Theme.red.opacity(0.7))
                                 .contentTransition(.numericText(countsDown: totalChange < 0))

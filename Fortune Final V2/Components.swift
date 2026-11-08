@@ -2,7 +2,8 @@
 //  Components.swift
 //  Fortune
 //
-//  The Small shared Things and items used across all the screens.
+//  Small shared views used across screens: logo, badges, backgrounds,
+//  footer, button style, flow layout, confetti, and the First Blood banner.
 //
 
 import SwiftUI
@@ -163,7 +164,7 @@ struct FortuneFooter: View {
         HStack {
             HStack(spacing: 6) {
                 LogoView(size: 14).opacity(0.5)
-                Text("Futures + Prediction Markets")
+                Text("Paper Trading Simulator")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.22))
             }
@@ -337,6 +338,4 @@ struct FirstBloodBanner: View {
         }
     }
 }
-
-// MARK: - Test
 

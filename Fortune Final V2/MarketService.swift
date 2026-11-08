@@ -2,8 +2,12 @@
 //  MarketService.swift
 //  Fortune
 //
-//  Finnhub API service. Get a free key at https://finnhub.io
-//  Replace the placeholder below with your key before running.
+//  Market data service: Finnhub for quotes, fundamentals, news, and the live
+//  WebSocket trade feed; Yahoo Finance for OHLC chart candles.
+//
+//  The Finnhub key is read from Secrets.plist (git-ignored). Copy the repo-root
+//  Secrets.example.plist into this folder as Secrets.plist and add a free key
+//  from https://finnhub.io
 //
 
 import Foundation
@@ -12,7 +16,15 @@ actor MarketService {
     static let shared = MarketService()
 
     private let base = "https://finnhub.io/api/v1"
-    private let apiKey = "d9akmi9r01qg31s551f0d9akmi9r01qg31s551fg"
+    private let apiKey = MarketService.loadAPIKey()
+
+    /// Reads FinnhubAPIKey from the bundled Secrets.plist; empty if missing.
+    private static func loadAPIKey() -> String {
+        guard let url  = Bundle.main.url(forResource: "Secrets", withExtension: "plist"),
+              let dict = NSDictionary(contentsOf: url),
+              let key  = dict["FinnhubAPIKey"] as? String else { return "" }
+        return key
+    }
 
     static let watchlist = [
         "AAPL", "NVDA", "MSFT", "TSLA", "AMZN", "META",
@@ -261,12 +273,6 @@ actor MarketService {
         return try JSONDecoder().decode([FinnhubRecommendation].self, from: data)
     }
 
-    private func rawCandles(symbol: String, resolution: String, from: Int, to: Int) async throws -> FinnhubCandles {
-        let (data, _) = try await URLSession.shared.data(from: endpoint("/stock/candle",
-            ["symbol": symbol, "resolution": resolution, "from": "\(from)", "to": "\(to)"]))
-        return try JSONDecoder().decode(FinnhubCandles.self, from: data)
-    }
-
     private func rawNews() async throws -> [FinnhubNewsItem] {
         let (data, _) = try await URLSession.shared.data(from: endpoint("/news", ["category": "general"]))
         return try JSONDecoder().decode([FinnhubNewsItem].self, from: data)
@@ -324,17 +330,6 @@ private struct FinnhubRecommendation: Decodable {
         strongSell = (try? c.decode(Int.self, forKey: .strongSell)) ?? 0
     }
     enum CodingKeys: String, CodingKey { case strongBuy, buy, hold, sell, strongSell }
-}
-
-private struct FinnhubCandles: Decodable {
-    let closes: [Double]?, timestamps: [Int]?, status: String
-    enum CodingKeys: String, CodingKey { case closes="c", timestamps="t", status="s" }
-    nonisolated init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        closes     = try? c.decode([Double].self, forKey: .closes)
-        timestamps = try? c.decode([Int].self, forKey: .timestamps)
-        status     = (try? c.decode(String.self, forKey: .status)) ?? ""
-    }
 }
 
 private struct FinnhubNewsItem: Decodable {

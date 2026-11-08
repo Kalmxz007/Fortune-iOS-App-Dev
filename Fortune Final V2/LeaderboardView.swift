@@ -171,7 +171,7 @@ struct LeaderboardView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
 
-            Text("\(e.pnl >= 0 ? "+" : "-")$\(abs(e.pnl).money())")
+            Text(e.pnl.signedMoney())
                 .font(.mono(12, weight: .semibold)).foregroundStyle(e.pnl >= 0 ? Theme.green : Theme.red)
                 .frame(width: cols[2], alignment: .trailing)
             Text(e.winRate > 0 ? "\(e.winRate.money(1))%" : "—")

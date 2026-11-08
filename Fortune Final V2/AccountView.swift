@@ -43,8 +43,7 @@ struct AccountView: View {
     }
 
     private var portfolioGainFormatted: String {
-        let sign = portfolioGain >= 0 ? "+" : "-"
-        return "\(sign)$\(abs(portfolioGain).money()) (\(sign)\(String(format: "%.1f", abs(portfolioGainPct)))%)"
+        "\(portfolioGain.signedMoney()) (\(portfolioGainPct.signedPercent(1)))"
     }
 
     private var bestHolding: Holding? {
@@ -98,8 +97,8 @@ struct AccountView: View {
                 }
             }
         } message: {
-            Text("Are you sure You want to sign out. You will be returned to the onboarding screen. Your current portfolio data and progress will NOT be saved and a new account will be generated")
-        }                              
+            Text("You'll return to onboarding. Your current portfolio and progress will be cleared and a new account will be created.")
+        }
         .alert("Choose Risk Level", isPresented: $showRiskOptions) {
             Button("Conservative") { model.updateRisk("conservative") }
             Button("Balanced") { model.updateRisk("balanced") }
@@ -126,13 +125,6 @@ struct AccountView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.25)) { model.activeTab = .pnl }
-            } label: {
-                Image(systemName: "chevron.left").font(.system(size: 16)).foregroundStyle(Theme.mutedForeground)
-                    .frame(width: 32, height: 32).background(Theme.card)
-                    .overlay(Circle().stroke(Theme.border)).clipShape(Circle())
-            }
             Text("Account").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.foreground)
         }
         .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 12)
@@ -199,8 +191,9 @@ struct AccountView: View {
     private var capitalCard: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Capital Balance").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
-                Text("$\(model.balance.money())").font(.mono(24, weight: .bold)).foregroundStyle(Theme.foreground)
+                Text("Portfolio Value").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                Text("$\(model.totalPortfolioValue.money())").font(.mono(24, weight: .bold)).foregroundStyle(Theme.foreground)
+                Text("Cash $\(model.balance.money())").font(.mono(11)).foregroundStyle(Theme.mutedForeground)
                 HStack(spacing: 6) {
                     Text(portfolioGainFormatted)
                         .font(.system(size: 12, weight: .medium))
@@ -227,18 +220,14 @@ struct AccountView: View {
             SectionLabel(text: "Trading Stats")
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 let pnl = model.totalPnL
-                let pnlSign = pnl >= 0 ? "+" : "-"
-                let pnlStr = "\(pnlSign)$\(abs(pnl).money())"
-                statCard("Total P&L", pnlStr, "All time", pnl >= 0 ? Theme.green : Theme.destructive)
+                statCard("Total P&L", pnl.signedMoney(), "All time", pnl >= 0 ? Theme.green : Theme.destructive)
 
                 let wr = model.winRate
                 let wrStr = model.closedTradeCount > 0 ? String(format: "%.1f%%", wr * 100) : "—"
-                let wrSub = model.closedTradeCount > 0 ? "\(model.closedTradeCount) trades" : "No trades yet"
+                let wrSub = model.closedTradeCount > 0 ? "\(model.closedTradeCount) closed trades" : "No closed trades yet"
                 statCard("Win Rate", wrStr, wrSub, Theme.primary)
 
-                let bestPnl = bestHolding?.pnl ?? 0
-                let bestSign = bestPnl >= 0 ? "+" : "-"
-                let bestStr = bestHolding != nil ? "\(bestSign)$\(abs(bestPnl).money())" : "—"
+                let bestStr = bestHolding.map { $0.pnl.signedMoney() } ?? "—"
                 let bestSub = bestHolding?.symbol ?? "No positions"
                 statCard("Best Position", bestStr, bestSub, Theme.accent)
 

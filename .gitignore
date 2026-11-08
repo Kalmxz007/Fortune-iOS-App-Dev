@@ -16,3 +16,6 @@ xcuserdata/
 # Optional: CocoaPods / Carthage if you ever add them
 Pods/
 Carthage/Build/
+
+# Local secrets (API keys)
+Secrets.plist
