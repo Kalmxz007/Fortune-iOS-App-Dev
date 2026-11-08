@@ -197,6 +197,12 @@ final class AppModel {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         load()
+        #if DEBUG
+        // Debug-only: launch straight to a tab, e.g. `-initialTab account` (used for screenshots)
+        if let raw = UserDefaults.standard.string(forKey: "initialTab"), let tab = AppTab(rawValue: raw) {
+            activeTab = tab
+        }
+        #endif
     }
 
     // MARK: Derived preferences
