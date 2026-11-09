@@ -18,32 +18,32 @@ struct OnboardingView: View {
 
     // MARK: Option data
 
-    private let experiences: [(id: String, label: String, desc: String, icon: String, tip: String)] = [
-        ("beginner", "Beginner", "Just getting started — I'm here to learn", "🌱", "We'll guide you step by step"),
-        ("intermediate", "Intermediate", "I know the basics and want to sharpen my edge", "📈", "Personalized tips for your level"),
-        ("pro", "Pro Trader", "Years of experience — here for the simulation", "⚡", "Advanced data & full control"),
+    private let experiences: [(id: ExperienceLevel, label: String, desc: String, icon: String, tip: String)] = [
+        (.beginner, "Beginner", "Just getting started — I'm here to learn", "🌱", "We'll guide you step by step"),
+        (.intermediate, "Intermediate", "I know the basics and want to sharpen my edge", "📈", "Personalized tips for your level"),
+        (.pro, "Pro Trader", "Years of experience — here for the simulation", "⚡", "Advanced data & full control"),
     ]
-    private let goals: [(id: String, label: String, desc: String, icon: String)] = [
-        ("learn", "Learn Markets", "Understand how stocks & trading work", "📚"),
-        ("grow", "Grow Wealth", "Build long-term portfolio habits", "💰"),
-        ("beat", "Beat the Market", "Compete and climb the leaderboard", "🏆"),
-        ("fun", "Just for Fun", "Experiment with zero risk", "🎯"),
+    private let goals: [(id: TradingGoal, label: String, desc: String, icon: String)] = [
+        (.learn, "Learn Markets", "Understand how stocks & trading work", "📚"),
+        (.grow, "Grow Wealth", "Build long-term portfolio habits", "💰"),
+        (.beat, "Beat the Market", "Compete and climb the Practice League", "🏆"),
+        (.fun, "Just for Fun", "Experiment with zero risk", "🎯"),
     ]
-    private let frequencies: [(id: String, label: String, desc: String, icon: String)] = [
-        ("active", "Active Trader", "I check markets daily and trade often", "⚡"),
-        ("swing", "Swing Trader", "I hold positions for days or weeks", "📊"),
-        ("casual", "Long-term Holder", "I invest and let positions breathe for months", "🌿"),
+    private let frequencies: [(id: TradingFrequency, label: String, desc: String, icon: String)] = [
+        (.active, "Active Trader", "I check markets daily and trade often", "⚡"),
+        (.swing, "Swing Trader", "I hold positions for days or weeks", "📊"),
+        (.casual, "Long-term Holder", "I invest and let positions breathe for months", "🌿"),
     ]
-    private let capitals: [(id: String, label: String, desc: String, hex: UInt)] = [
-        ("1k", "$1,000", "Starting small, learning the ropes", 0x4ADE80),
-        ("10k", "$10,000", "A balanced, realistic starting pot", 0x38D4FF),
-        ("100k", "$100,000", "Simulate serious portfolio moves", 0x6D74FF),
-        ("1m", "$1,000,000", "Go full whale mode 🐳", 0xB06AFF),
+    private let capitals: [(id: StartingCapital, label: String, desc: String, hex: UInt)] = [
+        (.oneThousand, "$1,000", "Starting small, learning the ropes", 0x4ADE80),
+        (.tenThousand, "$10,000", "A balanced, realistic starting pot", 0x38D4FF),
+        (.hundredThousand, "$100,000", "Simulate serious portfolio moves", 0x6D74FF),
+        (.oneMillion, "$1,000,000", "Go full whale mode 🐳", 0xB06AFF),
     ]
-    private let risks: [(id: String, label: String, desc: String, icon: String, hex: UInt)] = [
-        ("conservative", "Conservative", "Capital preservation first. Slow & steady.", "🛡️", 0x4ADE80),
-        ("balanced", "Balanced", "Mix of growth and safety. Best of both.", "⚖️", 0x6D74FF),
-        ("aggressive", "Aggressive", "Max returns. High volatility accepted.", "🔥", 0xF87171),
+    private let risks: [(id: RiskLevel, label: String, desc: String, icon: String, hex: UInt)] = [
+        (.conservative, "Conservative", "Capital preservation first. Slow & steady.", "🛡️", 0x4ADE80),
+        (.balanced, "Balanced", "Mix of growth and safety. Best of both.", "⚖️", 0x6D74FF),
+        (.aggressive, "Aggressive", "Max returns. High volatility accepted.", "🔥", 0xF87171),
     ]
     private let sectorList = ["Tech", "AI & ML", "Finance", "Energy", "Healthcare", "Consumer", "EV & Auto", "Crypto", "Biotech", "Defense", "Real Estate", "Media"]
 
@@ -149,7 +149,7 @@ struct OnboardingView: View {
 
     private var nameStep: some View {
         stepScaffold {
-            stepHeader("First, what's your name?", "We'll personalise your dashboard and leaderboard profile.")
+            stepHeader("First, what's your name?", "We'll personalise your dashboard and Practice League profile.")
             HStack(spacing: 12) {
                 Image(systemName: "person").foregroundStyle(.white.opacity(0.3))
                 TextField("", text: $data.name, prompt: Text("Your name or nickname").foregroundColor(.white.opacity(0.22)))
@@ -190,7 +190,7 @@ struct OnboardingView: View {
                 }
             }
         } button: {
-            gradientButton("Continue →", disabled: data.experience.isEmpty) { advance(to: 3) }
+            gradientButton("Continue →", disabled: data.experience == nil) { advance(to: 3) }
         }
     }
 
@@ -213,7 +213,7 @@ struct OnboardingView: View {
                 }
             }
         } button: {
-            gradientButton("Continue →", disabled: data.goal.isEmpty) { advance(to: 4) }
+            gradientButton("Continue →", disabled: data.goal == nil) { advance(to: 4) }
         }
     }
 
@@ -221,7 +221,7 @@ struct OnboardingView: View {
 
     private var frequencyStep: some View {
         stepScaffold {
-            stepHeader("How often do you plan to trade?", "This shapes your leaderboard category and alerts.")
+            stepHeader("How often do you plan to trade?", "This sets your default chart timeframe.")
             VStack(spacing: 10) {
                 ForEach(frequencies, id: \.id) { f in
                     SelectCard(selected: data.frequency == f.id) { data.frequency = f.id } content: {
@@ -236,7 +236,7 @@ struct OnboardingView: View {
                 }
             }
         } button: {
-            gradientButton("Continue →", disabled: data.frequency.isEmpty) { advance(to: 5) }
+            gradientButton("Continue →", disabled: data.frequency == nil) { advance(to: 5) }
         }
     }
 
@@ -265,7 +265,7 @@ struct OnboardingView: View {
                 }
             }
         } button: {
-            gradientButton("Continue →", disabled: data.capital.isEmpty) { advance(to: 6) }
+            gradientButton("Continue →", disabled: data.capital == nil) { advance(to: 6) }
         }
     }
 
@@ -293,7 +293,7 @@ struct OnboardingView: View {
                 }
             }
         } button: {
-            gradientButton("Continue →", disabled: data.risk.isEmpty) { advance(to: 7) }
+            gradientButton("Continue →", disabled: data.risk == nil) { advance(to: 7) }
         }
     }
 
@@ -330,7 +330,7 @@ struct OnboardingView: View {
     // MARK: Step 8 — Done
 
     private var doneStep: some View {
-        let archetype = getArchetype()
+        let archetype = Archetype(experience: data.experience, risk: data.risk, frequency: data.frequency)
         let capital = capitals.first { $0.id == data.capital }
         return ScrollView(showsIndicators: false) {
             VStack(spacing: 0) {
@@ -391,20 +391,6 @@ struct OnboardingView: View {
             Spacer()
             Text(value).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
         }
-    }
-
-    // MARK: Archetype
-
-    private func getArchetype() -> (label: String, icon: String) {
-        let exp = data.experience, risk = data.risk, freq = data.frequency
-        if exp == "pro" && risk == "aggressive" { return ("Power Trader", "⚡") }
-        if exp == "pro" && risk == "balanced" { return ("Precision Trader", "🎯") }
-        if exp == "pro" { return ("Strategic Pro", "💎") }
-        if exp == "intermediate" && freq == "active" { return ("Swing Trader", "📈") }
-        if exp == "intermediate" { return ("Strategic Investor", "🧠") }
-        if risk == "aggressive" { return ("Bold Explorer", "🚀") }
-        if freq == "active" { return ("Eager Learner", "⚡") }
-        return ("Rising Trader", "🌟")
     }
 
     // MARK: Helpers

@@ -29,12 +29,16 @@ struct LeaderboardView: View {
         ZStack {
             ImmersiveBackground()
             VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    Text("🌐").font(.system(size: 18))
-                    Text("Global Leaderboard")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.95))
-                    Spacer()
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("🏆").font(.system(size: 18))
+                        Text("Practice League")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.95))
+                        Spacer()
+                    }
+                    Text("You vs. simulated traders · ranked by % return")
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
                 }
                 .padding(.top, 18).padding(.bottom, 16)
 
@@ -135,7 +139,7 @@ struct LeaderboardView: View {
         HStack(spacing: 0) {
             Text("RANK").frame(width: cols[0])
             Text("TRADER").frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
-            Text("PNL").frame(width: cols[2], alignment: .trailing)
+            Text("RETURN").frame(width: cols[2], alignment: .trailing)
             Text("WIN RATE").frame(width: cols[3], alignment: .trailing)
             Text("TRADES").frame(width: cols[4], alignment: .trailing)
         }
@@ -167,13 +171,29 @@ struct LeaderboardView: View {
                 Text(e.name)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(e.isMe ? 0.95 : 0.80))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .layoutPriority(1)   // the name wins space over the BOT tag
+                if e.isBot {
+                    Text("BOT")
+                        .font(.system(size: 8, weight: .bold)).tracking(0.5)
+                        .fixedSize()
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .overlay(RoundedRectangle(cornerRadius: 3).stroke(.white.opacity(0.2)))
+                        .accessibilityLabel("Simulated trader")
+                }
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading).padding(.leading, 8)
 
-            Text(e.pnl.signedMoney())
-                .font(.mono(12, weight: .semibold)).foregroundStyle(e.pnl >= 0 ? Theme.green : Theme.red)
-                .frame(width: cols[2], alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(e.returnPct.signedPercent(1))
+                    .font(.mono(12, weight: .semibold)).foregroundStyle(e.returnPct >= 0 ? Theme.green : Theme.red)
+                Text(e.pnl.signedMoney(0))
+                    .font(.mono(9)).foregroundStyle(.white.opacity(0.35))
+            }
+            .frame(width: cols[2], alignment: .trailing)
             Text(e.winRate > 0 ? "\(e.winRate.money(1))%" : "—")
                 .font(.mono(12)).foregroundStyle(.white.opacity(0.70))
                 .frame(width: cols[3], alignment: .trailing)

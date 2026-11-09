@@ -50,14 +50,6 @@ struct AccountView: View {
         model.holdings.max(by: { $0.pnl < $1.pnl })
     }
 
-    private var riskLabel: String {
-        switch model.risk {
-        case "conservative": return "Conservative"
-        case "aggressive":   return "Aggressive"
-        default:             return "Balanced"
-        }
-    }
-
     private var stopLossLabel: String {
         "−\(Int((model.defaultStopLossPct * 100).rounded()))% from entry price"
     }
@@ -100,9 +92,9 @@ struct AccountView: View {
             Text("You'll return to onboarding. Your current portfolio and progress will be cleared and a new account will be created.")
         }
         .alert("Choose Risk Level", isPresented: $showRiskOptions) {
-            Button("Conservative") { model.updateRisk("conservative") }
-            Button("Balanced") { model.updateRisk("balanced") }
-            Button("Aggressive") { model.updateRisk("aggressive") }
+            ForEach(RiskLevel.allCases, id: \.self) { level in
+                Button(level.label) { model.updateRisk(level) }
+            }
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This updates your trading profile and risk-based suggestions.")
@@ -232,7 +224,7 @@ struct AccountView: View {
                 statCard("Best Position", bestStr, bestSub, Theme.accent)
 
                 let rankStr = myLeaderboardRank.map { "#\($0)" } ?? "—"
-                statCard("Leaderboard", rankStr, "Global rank", Color(hex: 0xF59E0B))
+                statCard("Practice League", rankStr, "Rank by % return", Color(hex: 0xF59E0B))
             }
         }
     }
@@ -304,7 +296,7 @@ struct AccountView: View {
             )
             rowDivider
             Button { showRiskOptions = true } label: {
-                NavRow(icon: "waveform.path.ecg", label: "Risk Level", detail: riskLabel)
+                NavRow(icon: "waveform.path.ecg", label: "Risk Level", detail: model.risk.label)
             }
             .buttonStyle(.plain)
             rowDivider
@@ -355,7 +347,7 @@ struct AccountView: View {
                 Text("Saved").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.emerald)
             }
             rowDivider
-            NavRow(icon: "trophy", label: "Leaderboard Profile", detail: "Public · Global rank \(myLeaderboardRank.map { "#\($0)" } ?? "—")")
+            NavRow(icon: "trophy", label: "Practice League", detail: "Simulated opponents · Rank \(myLeaderboardRank.map { "#\($0)" } ?? "—")")
             rowDivider
             Button { showPrivacyPolicy = true } label: {
                 NavRow(icon: "lock", label: "Privacy", detail: "Manage your data")

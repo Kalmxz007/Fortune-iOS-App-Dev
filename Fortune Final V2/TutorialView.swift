@@ -44,7 +44,7 @@ struct TutorialView: View {
             icon: "chart.xyaxis.line",
             iconColor: Color(hex: 0x38D4FF),
             title: "Reading the Chart",
-            body: "The smooth line chart at the top of the Trade tab tracks price movement for the selected stock. Green means the stock is up today; red means it is down.\n\nSwitch timeframes using the buttons below the price — 1D, 1W, 1M, or 3M.",
+            body: "The candlestick chart at the top of the Trade tab tracks price movement for the selected stock. Green candles closed higher than they opened; red candles closed lower.\n\nSwitch timeframes using the buttons below the price — 1D, 1W, 1M, or 3M.",
             tip: "The chart updates live via WebSocket. The line extends in real time as new prices arrive from the market."
         ),
         .init(
@@ -64,9 +64,9 @@ struct TutorialView: View {
         .init(
             icon: "trophy.fill",
             iconColor: Color(hex: 0xF59E0B),
-            title: "The Leaderboard",
-            body: "See where you rank against other traders. Your position is calculated from your total P&L — realized and unrealized combined.\n\nClimb the board by making profitable trades, increasing your win rate, and growing your portfolio.",
-            tip: "The leaderboard also feeds into Achievements. Reach #1 to unlock the Top Gainer badge."
+            title: "The Practice League",
+            body: "See how you stack up against simulated traders (marked BOT). Everyone is ranked by % return on their starting balance, so a $1K account competes fairly with a $1M one.\n\nAll Time uses your total P&L. This Week counts only trades closed since Monday plus your open positions.",
+            tip: "The league also feeds into Achievements. Reach #1 to unlock the Top Gainer badge."
         ),
         .init(
             icon: "person.crop.circle.badge.checkmark",

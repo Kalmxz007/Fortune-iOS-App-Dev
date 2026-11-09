@@ -2,11 +2,11 @@
 //  Models.swift
 //  Fortune
 //
-//  Domain models + the app-wide observable state object.
+//  Domain types shared across the app. App state lives in AppModel.swift;
+//  trading rules live in PortfolioEngine.swift.
 //
 
 import SwiftUI
-import Observation
 
 // MARK: - Tabs
 
@@ -34,6 +34,53 @@ enum AppTab: String, CaseIterable, Hashable {
     }
 }
 
+// MARK: - Orders
+
+enum OrderSide: String, CaseIterable, Codable {
+    case buy = "BUY"
+    case sell = "SELL"
+}
+
+struct TradeOrder: Identifiable, Codable {
+    let id:         UUID
+    let symbol:     String
+    let name:       String
+    let side:       OrderSide
+    let qty:        Int
+    let entryPrice: Decimal
+    let stopLoss:   Decimal?
+    let takeProfit: Decimal?
+    let date:       Date
+
+    /// Prices come in as market quotes (Double) and are stored as exact dollars and cents.
+    init(symbol: String, name: String, side: OrderSide, qty: Int,
+         entryPrice: Double, stopLoss: Double?, takeProfit: Double?, date: Date = Date()) {
+        self.id         = UUID()
+        self.symbol     = symbol
+        self.name       = name
+        self.side       = side
+        self.qty        = qty
+        self.entryPrice = Decimal(price: entryPrice)
+        self.stopLoss   = stopLoss.map(Decimal.init(price:))
+        self.takeProfit = takeProfit.map(Decimal.init(price:))
+        self.date       = date
+    }
+
+    /// Older versions saved prices as Doubles and stop loss / take profit as Strings ("" for none).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id         = try c.decode(UUID.self, forKey: .id)
+        symbol     = try c.decode(String.self, forKey: .symbol)
+        name       = try c.decode(String.self, forKey: .name)
+        side       = try c.decode(OrderSide.self, forKey: .side)
+        qty        = try c.decode(Int.self, forKey: .qty)
+        entryPrice = try c.decode(Decimal.self, forKey: .entryPrice).roundedToCents()
+        date       = try c.decode(Date.self, forKey: .date)
+        stopLoss   = try c.decodeLenientDecimal(forKey: .stopLoss)
+        takeProfit = try c.decodeLenientDecimal(forKey: .takeProfit)
+    }
+}
+
 // MARK: - Closed trade journal
 
 struct ClosedTrade: Identifiable, Codable {
@@ -41,16 +88,16 @@ struct ClosedTrade: Identifiable, Codable {
     let symbol:      String
     let name:        String
     let shares:      Int
-    let entryPrice:  Double
-    let exitPrice:   Double
-    let pnl:         Double
+    let entryPrice:  Decimal
+    let exitPrice:   Decimal
+    let pnl:         Decimal
     let exitReason:  ExitReason
     let openedAt:    Date
     let closedAt:    Date
 
     init(symbol: String, name: String, shares: Int,
-         entryPrice: Double, exitPrice: Double, pnl: Double,
-         exitReason: ExitReason, openedAt: Date) {
+         entryPrice: Decimal, exitPrice: Decimal, pnl: Decimal,
+         exitReason: ExitReason, openedAt: Date, closedAt: Date = Date()) {
         self.id         = UUID()
         self.symbol     = symbol
         self.name       = name
@@ -60,7 +107,7 @@ struct ClosedTrade: Identifiable, Codable {
         self.pnl        = pnl
         self.exitReason = exitReason
         self.openedAt   = openedAt
-        self.closedAt   = Date()
+        self.closedAt   = closedAt
     }
 
     enum ExitReason: String, Codable {
@@ -77,1045 +124,29 @@ struct ClosedTrade: Identifiable, Codable {
         }
     }
 
-    var pct:   Double { guard entryPrice > 0 else { return 0 }; return (exitPrice - entryPrice) / entryPrice * 100 }
-    var isWin: Bool   { pnl > 0 }
+    var pct: Double {
+        guard entryPrice > 0 else { return 0 }
+        return ((exitPrice - entryPrice) / entryPrice * 100).doubleValue
+    }
+    var isWin: Bool { pnl > 0 }
 }
 
-// MARK: - Persistence container
+// MARK: - Portfolio display
 
-private struct PersistedState: Codable {
-    var onboarded:        Bool
-    var userName:         String
-    var balance:          Double
-    var startingCapital:  Double
-    var orders:           [TradeOrder]
-    var joinDate:         Date
-    var experience:       String
-    var goal:             String
-    var frequency:        String
-    var risk:             String
-    var customStopLossPct: Double?
-    var weeklyDigestEnabled: Bool?
-    var notificationsEnabled: Bool?
-    var stockAlertsEnabled: Bool?
-    var xpMilestonesEnabled: Bool?
-    var lastNewsRefresh: Date?
-    var preferredSectors: [String]
-    var realizedPnL:      Double
-    var winCount:         Int
-    var closedTradeCount: Int
-    var closedTrades:     [ClosedTrade]
-    var priceAlerts:      [PriceAlert]?
-    var bonusXP:          Int?
-    var challengeDay:     String?
-    var awardedChallenges: [String]?
-    var starredSymbols:   [String]?
-    var watchlistSyncEnabled: Bool?
+/// An open position valued at the latest quote. Display values only; the ledger is in PortfolioEngine.
+struct Holding: Identifiable {
+    let symbol:  String
+    let shares:  Int
+    let avgCost: Double
+    let current: Double
+    var id: String { symbol }
+
+    var pnl:         Double { (current - avgCost) * Double(shares) }
+    var pct:         Double { guard avgCost > 0 else { return 0 }; return (current - avgCost) / avgCost * 100 }
+    var marketValue: Double { current * Double(shares) }
 }
 
-// MARK: - App state
-
-@Observable
-final class AppModel {
-    var onboarded        = false
-    var userName         = "Trader"
-    var balance:         Double = 10_000
-    var startingCapital: Double = 10_000
-    var activeTab:       AppTab = .trade
-    var orders:          [TradeOrder] = []
-    var joinDate:        Date = Date()
-
-    // Onboarding preferences
-    var experience:       String   = ""
-    var goal:             String   = ""
-    var frequency:        String   = ""
-    var risk:             String   = ""
-    var customStopLossPct: Double? = nil
-    var weeklyDigestEnabled = true
-    var preferredSectors: [String] = []
-
-    // Notification preferences (persisted). Master switch + per-category toggles.
-    var notificationsEnabled = false
-    var stockAlertsEnabled   = true
-    var xpMilestonesEnabled  = true
-
-    // Live market data
-    var stocks:    [Stock]                = []
-    var news:      [NewsItem]             = []
-    var chartData: [String: [Candle]] = [:]
-    var isLoading  = false
-    var lastNewsRefresh: Date? = nil
-
-    // PnL tracking
-    var realizedPnL:      Double = 0
-    var winCount:         Int    = 0
-    var closedTradeCount: Int    = 0
-    var closedTrades:     [ClosedTrade] = []
-
-    // Trade confirmation toast (set on every buy/sell, cleared by UI)
-    var tradeConfirmation: String? = nil
-    // Last SL/TP alert message (cleared after display)
-    var lastAlert: String? = nil
-    // Controls the tutorial sheet
-    var showTutorial = false
-    // Triggers the First Blood confetti celebration (first trade of the day)
-    var showFirstBloodCelebration = false
-    // User-created price alerts; each fires once when its target is crossed, then is removed
-    var priceAlerts: [PriceAlert] = []
-
-    // XP earned from daily challenges, plus which challenges were already awarded on `challengeDay`
-    var bonusXP = 0
-    private var challengeDay = ""
-    private var awardedChallenges: Set<String> = []
-
-    // Starred stocks, optionally synced across devices via iCloud key-value storage
-    var starredSymbols: [String] = []
-    var watchlistSyncEnabled = true
-    private static let cloudWatchlistKey = "starredSymbols"
-
-    // Trade screen filters, kept here so they survive switching tabs (nil = use onboarding defaults)
-    var tradeSector:    String? = nil
-    var tradeTimeframe: String? = nil
-
-    // Price direction tracking: populated before each quote refresh
-    var previousPrices:      [String: Double] = [:]
-    var isRefreshingPrices   = false
-    private var isLoadingMarketData = false
-
-    // WebSocket throttle — last time each symbol's price was pushed to the UI
-    private var lastWSUpdate: [String: Date] = [:]
-
-    // Price-alert throttle — last time a movement notification fired per symbol
-    private var lastPriceAlert: [String: Date] = [:]
-    private let priceAlertThresholdPct = 5.0
-
-    private static let storeKey = "fortune_state_v1"
-    private let defaults: UserDefaults
-    private static let dayKeyFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
-    private static let dayLabelFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d"; return f }()
-
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        load()
-        #if DEBUG
-        // Debug-only: launch straight to a tab, e.g. `-initialTab account` (used for screenshots)
-        if let raw = UserDefaults.standard.string(forKey: "initialTab"), let tab = AppTab(rawValue: raw) {
-            activeTab = tab
-        }
-        #endif
-    }
-
-    // MARK: Derived preferences
-
-    var archetype: (label: String, icon: String) {
-        if experience == "pro"          && risk == "aggressive" { return ("Power Trader",      "⚡") }
-        if experience == "pro"          && risk == "balanced"   { return ("Precision Trader",  "🎯") }
-        if experience == "pro"                                  { return ("Strategic Pro",      "💎") }
-        if experience == "intermediate" && frequency == "active"{ return ("Swing Trader",      "📈") }
-        if experience == "intermediate"                         { return ("Strategic Investor", "🧠") }
-        if risk == "aggressive"                                 { return ("Bold Explorer",      "🚀") }
-        if frequency == "active"                                { return ("Eager Learner",      "⚡") }
-        return ("Rising Trader", "🌟")
-    }
-
-    var defaultStopLossPct: Double {
-        customStopLossPct ?? riskBasedStopLossPct
-    }
-
-    private var riskBasedStopLossPct: Double {
-        switch risk {
-        case "conservative": return 0.02
-        case "aggressive":   return 0.05
-        default:             return 0.03
-        }
-    }
-
-    var defaultTakeProfitPct: Double {
-        switch risk {
-        case "conservative": return 0.04
-        case "aggressive":   return 0.10
-        default:             return 0.06
-        }
-    }
-
-    var defaultTimeframe: String {
-        switch frequency {
-        case "swing":  return "1W"
-        case "casual": return "1M"
-        default:       return "1D"
-        }
-    }
-
-    // MARK: Gamification (derived from real activity)
-
-    var totalXP: Int {
-        closedTradeCount * 200 + winCount * 100 + max(0, Int(realizedPnL / 100)) + bonusXP
-    }
-    var level: Int { max(1, 1 + totalXP / 1_000) }
-    var xpInCurrentLevel: Int { totalXP % 1_000 }
-    var xpProgress: Double { Double(xpInCurrentLevel) / 1_000.0 }
-
-    var totalPortfolioValue: Double {
-        balance + holdings.reduce(0) { $0 + $1.marketValue }
-    }
-
-    var defaultSortLabel: String {
-        switch goal {
-        case "beat": return "gainers"
-        default:     return "default_"
-        }
-    }
-
-    // MARK: Persistence
-
-    func save() {
-        let state = PersistedState(
-            onboarded:        onboarded,
-            userName:         userName,
-            balance:          balance,
-            startingCapital:  startingCapital,
-            orders:           orders,
-            joinDate:         joinDate,
-            experience:       experience,
-            goal:             goal,
-            frequency:        frequency,
-            risk:             risk,
-            customStopLossPct: customStopLossPct,
-            weeklyDigestEnabled: weeklyDigestEnabled,
-            notificationsEnabled: notificationsEnabled,
-            stockAlertsEnabled: stockAlertsEnabled,
-            xpMilestonesEnabled: xpMilestonesEnabled,
-            lastNewsRefresh: lastNewsRefresh,
-            preferredSectors: preferredSectors,
-            realizedPnL:      realizedPnL,
-            winCount:         winCount,
-            closedTradeCount: closedTradeCount,
-            closedTrades:     closedTrades,
-            priceAlerts:      priceAlerts,
-            bonusXP:          bonusXP,
-            challengeDay:     challengeDay,
-            awardedChallenges: Array(awardedChallenges),
-            starredSymbols:   starredSymbols,
-            watchlistSyncEnabled: watchlistSyncEnabled
-        )
-        if let data = try? JSONEncoder().encode(state) {
-            defaults.set(data, forKey: Self.storeKey)
-        }
-    }
-
-    private func load() {
-        guard let data  = defaults.data(forKey: Self.storeKey),
-              let state = try? JSONDecoder().decode(PersistedState.self, from: data)
-        else { return }
-        onboarded        = state.onboarded
-        userName         = state.userName
-        balance          = state.balance
-        startingCapital  = state.startingCapital
-        orders           = state.orders
-        joinDate         = state.joinDate
-        experience       = state.experience
-        goal             = state.goal
-        frequency        = state.frequency
-        risk             = state.risk
-        customStopLossPct = state.customStopLossPct
-        weeklyDigestEnabled = state.weeklyDigestEnabled ?? true
-        notificationsEnabled = state.notificationsEnabled ?? false
-        stockAlertsEnabled   = state.stockAlertsEnabled ?? true
-        xpMilestonesEnabled  = state.xpMilestonesEnabled ?? true
-        lastNewsRefresh = state.lastNewsRefresh
-        preferredSectors = state.preferredSectors
-        realizedPnL      = state.realizedPnL
-        winCount         = state.winCount
-        closedTradeCount = state.closedTradeCount
-        closedTrades     = state.closedTrades
-        priceAlerts      = state.priceAlerts ?? []
-        bonusXP          = state.bonusXP ?? 0
-        challengeDay     = state.challengeDay ?? ""
-        awardedChallenges = Set(state.awardedChallenges ?? [])
-        starredSymbols   = state.starredSymbols ?? []
-        watchlistSyncEnabled = state.watchlistSyncEnabled ?? true
-    }
-
-    // MARK: Onboarding
-
-    func completeOnboarding(_ data: OnboardingData) {
-        let trimmed = data.name.trimmingCharacters(in: .whitespaces)
-        userName         = trimmed.isEmpty ? "Trader" : trimmed
-        experience       = data.experience
-        goal             = data.goal
-        frequency        = data.frequency
-        risk             = data.risk
-        customStopLossPct = nil
-        weeklyDigestEnabled = true
-        lastNewsRefresh = nil
-        preferredSectors = data.sectors
-        joinDate         = Date()
-        switch data.capital {
-        case "1k":   startingCapital = 1_000
-        case "10k":  startingCapital = 10_000
-        case "100k": startingCapital = 100_000
-        case "1m":   startingCapital = 1_000_000
-        default: break
-        }
-        orders.removeAll()
-        closedTrades.removeAll()
-        realizedPnL      = 0
-        winCount         = 0
-        closedTradeCount = 0
-        bonusXP          = 0
-        awardedChallenges.removeAll()
-        priceAlerts.removeAll()
-        balance = startingCapital
-        onboarded = true
-        if experience == "beginner" || experience == "intermediate" {
-            showTutorial = true
-        }
-        save()
-    }
-
-    func signOut() {
-        onboarded = false
-        activeTab = .trade
-        save()
-    }
-
-    func updateRisk(_ newRisk: String) {
-        risk = newRisk
-        save()
-    }
-
-    func updateDefaultStopLossPct(_ pct: Double) {
-        customStopLossPct = pct
-        save()
-    }
-
-    func updateWeeklyDigestEnabled(_ isEnabled: Bool) {
-        weeklyDigestEnabled = isEnabled
-        save()
-    }
-
-    /// Master notifications toggle. Turning on requests OS permission and only
-    /// stays on if the user grants it, so the switch reflects reality.
-    func setNotificationsEnabled(_ isEnabled: Bool) async {
-        if isEnabled {
-            notificationsEnabled = await NotificationManager.shared.requestAuthorization()
-        } else {
-            notificationsEnabled = false
-        }
-        save()
-    }
-
-    func updateStockAlertsEnabled(_ isEnabled: Bool) {
-        stockAlertsEnabled = isEnabled
-        save()
-    }
-
-    func updateXPMilestonesEnabled(_ isEnabled: Bool) {
-        xpMilestonesEnabled = isEnabled
-        save()
-    }
-
-    /// Re-syncs the master toggle with the OS setting (e.g. user revoked
-    /// permission in iOS Settings while the app was backgrounded).
-    func syncNotificationAuthorization() async {
-        if notificationsEnabled {
-            notificationsEnabled = await NotificationManager.shared.isAuthorized()
-            save()
-        }
-    }
-
-    // MARK: Notification triggers
-
-    /// Fires a level-up notification when totalXP crosses into a new level.
-    private func notifyIfLeveledUp(from oldLevel: Int) {
-        guard notificationsEnabled, xpMilestonesEnabled, level > oldLevel else { return }
-        NotificationManager.shared.send(
-            title: "🎉 Level Up! You reached Level \(level)",
-            body: "Nice work, \(userName). Keep trading to climb the global leaderboard."
-        )
-    }
-
-    /// Notifies about held stocks that have made a big move today (throttled per symbol).
-    private func maybeSendPriceAlerts() {
-        guard notificationsEnabled, stockAlertsEnabled else { return }
-        let now = Date()
-        let heldSymbols = Set(holdings.map(\.symbol))
-        for stock in stocks where heldSymbols.contains(stock.symbol) {
-            guard abs(stock.pct) >= priceAlertThresholdPct else { continue }
-            // At most one alert per symbol every 30 minutes.
-            if let last = lastPriceAlert[stock.symbol], now.timeIntervalSince(last) < 1_800 { continue }
-            lastPriceAlert[stock.symbol] = now
-            let dir = stock.pct >= 0 ? "up" : "down"
-            NotificationManager.shared.send(
-                title: "\(stock.symbol) is \(dir) \(String(format: "%.1f", abs(stock.pct)))% today",
-                body: "\(stock.name) is trading at $\(String(format: "%.2f", stock.price))."
-            )
-        }
-    }
-
-    /// Fires and removes any price alerts whose target has been crossed.
-    func checkPriceAlerts() {
-        guard !priceAlerts.isEmpty else { return }
-        let fired = priceAlerts.filter { alert in
-            guard let target = Double(alert.target),
-                  let price  = stocks.first(where: { $0.symbol == alert.symbol })?.price else { return false }
-            return alert.above ? price >= target : price <= target
-        }
-        guard !fired.isEmpty else { return }
-        let firedIDs = Set(fired.map(\.id))
-        priceAlerts.removeAll { firedIDs.contains($0.id) }
-        save()
-        for alert in fired {
-            let dir = alert.above ? "above" : "below"
-            lastAlert = "🔔 \(alert.symbol) is \(dir) $\(alert.target)"
-            if notificationsEnabled && stockAlertsEnabled {
-                NotificationManager.shared.send(
-                    title: "🔔 Price alert: \(alert.symbol)",
-                    body: "\(alert.symbol) moved \(dir) your $\(alert.target) target."
-                )
-            }
-        }
-    }
-
-    func resetPortfolio() {
-        orders.removeAll()
-        closedTrades.removeAll()
-        balance          = startingCapital
-        realizedPnL      = 0
-        winCount         = 0
-        closedTradeCount = 0
-        bonusXP          = 0
-        tradeConfirmation = nil
-        lastAlert         = nil
-        save()
-    }
-
-    /// Sell an entire open holding at the current live price.
-    func closePosition(_ holding: Holding) {
-        let price = stocks.first { $0.symbol == holding.symbol }?.price ?? holding.current
-        placeOrder(TradeOrder(symbol: holding.symbol, name: holding.symbol,
-                              side: .sell, qty: holding.shares, entryPrice: price,
-                              stopLoss: "", takeProfit: ""))
-    }
-
-    /// Sell a specific number of shares from a holding.
-    func partialSell(holding: Holding, shares: Int) {
-        guard shares > 0, shares <= holding.shares else { return }
-        let price = stocks.first { $0.symbol == holding.symbol }?.price ?? holding.current
-        placeOrder(TradeOrder(symbol: holding.symbol, name: holding.symbol,
-                              side: .sell, qty: shares, entryPrice: price,
-                              stopLoss: "", takeProfit: ""))
-    }
-
-    // MARK: Order placement
-
-    func placeOrder(_ order: TradeOrder) {
-        let cost = Double(order.qty) * order.entryPrice
-        let levelBefore = level
-        let isFirstTradeToday = !hasTradeToday()
-        if order.side == .buy {
-            guard balance >= cost else { return }
-            balance -= cost
-            tradeConfirmation = "Bought \(order.qty) × \(order.symbol) @ $\(String(format: "%.2f", order.entryPrice))"
-        } else {
-            let avgCost  = currentAvgCost(for: order.symbol)
-            let realized = (order.entryPrice - avgCost) * Double(order.qty)
-            realizedPnL      += realized
-            if realized > 0 { winCount += 1 }
-            closedTradeCount += 1
-            balance          += cost
-
-            let openedAt = orders.last(where: { $0.symbol == order.symbol && $0.side == .buy })?.date ?? order.date
-            closedTrades.insert(ClosedTrade(
-                symbol:     order.symbol,
-                name:       order.name,
-                shares:     order.qty,
-                entryPrice: avgCost,
-                exitPrice:  order.entryPrice,
-                pnl:        realized,
-                exitReason: .manual,
-                openedAt:   openedAt
-            ), at: 0)
-
-            tradeConfirmation = realized >= 0
-                ? "Sold \(order.symbol) · +$\(String(format: "%.2f", realized))"
-                : "Sold \(order.symbol) · -$\(String(format: "%.2f", abs(realized)))"
-        }
-        orders.insert(order, at: 0)
-        if isFirstTradeToday { showFirstBloodCelebration = true }
-        awardCompletedChallenges()
-        notifyIfLeveledUp(from: levelBefore)
-        save()
-    }
-
-    func hasTradeToday() -> Bool {
-        let today = Calendar.current.startOfDay(for: Date())
-        return orders.contains { Calendar.current.startOfDay(for: $0.date) == today }
-    }
-
-    // MARK: SL/TP auto-execution
-
-    /// Call this after every quote refresh — closes positions whose SL or TP has been hit.
-    func checkAndTriggerSLTP() {
-        var triggered: Set<String> = []
-        for holding in holdings {
-            guard !triggered.contains(holding.symbol) else { continue }
-            guard let price = stocks.first(where: { $0.symbol == holding.symbol })?.price else { continue }
-            // Use the most recent buy order's SL/TP values
-            guard let ref = orders.first(where: { $0.symbol == holding.symbol && $0.side == .buy }) else { continue }
-            let sl = Double(ref.stopLoss)   ?? 0
-            let tp = Double(ref.takeProfit) ?? 0
-            if sl > 0 && price <= sl {
-                autoClose(holding: holding, price: price, reason: .stopLoss)
-                triggered.insert(holding.symbol)
-            } else if tp > 0 && price >= tp {
-                autoClose(holding: holding, price: price, reason: .takeProfit)
-                triggered.insert(holding.symbol)
-            }
-        }
-    }
-
-    private func autoClose(holding: Holding, price: Double, reason: ClosedTrade.ExitReason) {
-        let levelBefore = level
-        let avgCost  = holding.avgCost
-        let realized = (price - avgCost) * Double(holding.shares)
-        realizedPnL      += realized
-        if realized > 0 { winCount += 1 }
-        closedTradeCount += 1
-        balance          += Double(holding.shares) * price
-
-        let openedAt = orders.last(where: { $0.symbol == holding.symbol && $0.side == .buy })?.date ?? Date()
-        closedTrades.insert(ClosedTrade(
-            symbol:     holding.symbol,
-            name:       holding.symbol,
-            shares:     holding.shares,
-            entryPrice: avgCost,
-            exitPrice:  price,
-            pnl:        realized,
-            exitReason: reason,
-            openedAt:   openedAt
-        ), at: 0)
-
-        // Insert synthetic sell order so position collapses in computed holdings
-        orders.insert(TradeOrder(symbol: holding.symbol, name: holding.symbol,
-                                 side: .sell, qty: holding.shares, entryPrice: price,
-                                 stopLoss: "", takeProfit: ""), at: 0)
-
-        lastAlert = reason == .stopLoss
-            ? "🛑 Stop Loss hit — \(holding.symbol) sold @ $\(String(format: "%.2f", price))"
-            : "🎯 Take Profit hit — \(holding.symbol) sold @ $\(String(format: "%.2f", price))"
-
-        if notificationsEnabled && stockAlertsEnabled {
-            let pnlStr = realized >= 0
-                ? "+$\(String(format: "%.2f", realized))"
-                : "-$\(String(format: "%.2f", abs(realized)))"
-            NotificationManager.shared.send(
-                title: reason == .stopLoss
-                    ? "🛑 Stop Loss triggered on \(holding.symbol)"
-                    : "🎯 Take Profit hit on \(holding.symbol)",
-                body: "Sold \(holding.shares) share\(holding.shares == 1 ? "" : "s") @ $\(String(format: "%.2f", price)) · \(pnlStr)"
-            )
-        }
-        awardCompletedChallenges()
-        notifyIfLeveledUp(from: levelBefore)
-        save()
-    }
-
-    // MARK: Daily challenges
-
-    struct DailyChallenge: Identifiable {
-        let id: String
-        let icon: String, title: String, detail: String
-        let xp: Int, progress: Int, total: Int
-        var done: Bool { progress >= total }
-    }
-
-    /// Challenge progress, derived from the user's real activity today.
-    var dailyChallenges: [DailyChallenge] {
-        [
-            .init(id: "firstBlood", icon: "⚡", title: "First Blood",   detail: "Place your first trade today",
-                  xp: 50,  progress: hasTradeToday() ? 1 : 0, total: 1),
-            .init(id: "diversify",  icon: "📊", title: "Diversify",     detail: "Hold 3 different stocks at once",
-                  xp: 100, progress: min(holdings.count, 3), total: 3),
-            .init(id: "profitStreak", icon: "🔥", title: "Profit Streak", detail: "Close 3 trades in the green",
-                  xp: 200, progress: min(greenClosesToday, 3), total: 3),
-        ]
-    }
-
-    /// Grants XP once per day for each newly completed challenge. Caller saves.
-    private func awardCompletedChallenges() {
-        let today = Self.dayKeyFormatter.string(from: Date())
-        if challengeDay != today {
-            challengeDay = today
-            awardedChallenges.removeAll()
-        }
-        for c in dailyChallenges where c.done && !awardedChallenges.contains(c.id) {
-            awardedChallenges.insert(c.id)
-            bonusXP += c.xp
-        }
-    }
-
-    // MARK: Watchlist (starred stocks)
-
-    func isStarred(_ symbol: String) -> Bool { starredSymbols.contains(symbol) }
-
-    func toggleStar(_ symbol: String) {
-        if let i = starredSymbols.firstIndex(of: symbol) {
-            starredSymbols.remove(at: i)
-        } else {
-            starredSymbols.append(symbol)
-        }
-        save()
-        pushWatchlistToCloud()
-    }
-
-    func setWatchlistSyncEnabled(_ isEnabled: Bool) {
-        watchlistSyncEnabled = isEnabled
-        save()
-        if isEnabled {
-            // Merge rather than overwrite, so stars from either device aren't lost
-            pullWatchlistFromCloud()
-            pushWatchlistToCloud()
-        }
-    }
-
-    private func pushWatchlistToCloud() {
-        guard watchlistSyncEnabled else { return }
-        let store = NSUbiquitousKeyValueStore.default
-        store.set(starredSymbols, forKey: Self.cloudWatchlistKey)
-        store.synchronize()
-    }
-
-    /// Merges stars saved in iCloud (from this or another device) into the local list.
-    func pullWatchlistFromCloud() {
-        guard watchlistSyncEnabled else { return }
-        let cloud = NSUbiquitousKeyValueStore.default.array(forKey: Self.cloudWatchlistKey) as? [String] ?? []
-        let merged = starredSymbols + cloud.filter { !starredSymbols.contains($0) }
-        guard merged != starredSymbols else { return }
-        starredSymbols = merged
-        save()
-    }
-
-    /// Listens for iCloud changes pushed from the user's other devices. Call from a long-lived Task.
-    func observeCloudWatchlist() async {
-        NSUbiquitousKeyValueStore.default.synchronize()
-        pullWatchlistFromCloud()
-        let changes = NotificationCenter.default.notifications(
-            named: NSUbiquitousKeyValueStore.didChangeExternallyNotification)
-        for await _ in changes {
-            // Cloud is the source of truth for remote changes (including un-starring elsewhere)
-            guard watchlistSyncEnabled else { continue }
-            let cloud = NSUbiquitousKeyValueStore.default.array(forKey: Self.cloudWatchlistKey) as? [String] ?? []
-            if cloud != starredSymbols {
-                starredSymbols = cloud
-                save()
-            }
-        }
-    }
-
-    // MARK: Data loading
-
-    func loadMarketData() async {
-        // Guard: prevent concurrent duplicate loads (e.g. RootView + TradeView both firing at launch)
-        guard !isLoadingMarketData else { return }
-        isLoadingMarketData = true
-        defer { isLoadingMarketData = false }
-        isLoading = true
-
-        // Phase 1: Quote-only — 1 Finnhub call per symbol (22 total).
-        // All 22 fire concurrently; 22 << 60 calls/minute, so none fail due to rate limiting.
-        // Stocks appear in the UI within ~1-2 seconds.
-        async let baseStocks = MarketService.shared.fetchStocks()
-        async let newsItems  = MarketService.shared.fetchNewsItems()
-        var (fetched, fetchedNews) = await (baseStocks, newsItems)
-
-        // The first requests after launch occasionally fail (network not ready yet);
-        // retry with a short backoff before showing the error state.
-        for attempt in 1...2 where fetched.isEmpty && !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(Double(attempt) * 1.5))
-            fetched = await MarketService.shared.fetchStocks()
-        }
-
-        if !fetched.isEmpty    { stocks = fetched    }
-        if !fetchedNews.isEmpty { news  = fetchedNews }
-        isLoading = false  // UI now shows all stocks with live prices
-
-        // Phase 2: Enrich each stock with 52-week range, P/E, market cap, and analyst rating.
-        // 2 calls per symbol processed in batches of 5 (10 calls/batch) with 300 ms gaps
-        // to comfortably stay under Finnhub's 60 calls/minute free-tier limit.
-        let symbols = MarketService.watchlist
-        for batchStart in stride(from: 0, to: symbols.count, by: 5) {
-            guard !Task.isCancelled else { break }
-            let batch = Array(symbols[batchStart ..< min(batchStart + 5, symbols.count)])
-            let enrichments = await withTaskGroup(
-                of: (String, String, Double, Double, Double, String, UInt)?.self
-            ) { group in
-                for symbol in batch {
-                    group.addTask {
-                        guard let d = await MarketService.shared.enrichStock(symbol: symbol) else { return nil }
-                        return (symbol, d.mktCap, d.pe, d.high52, d.low52, d.rating, d.ratingHex)
-                    }
-                }
-                var out: [(String, String, Double, Double, Double, String, UInt)] = []
-                for await r in group { if let r { out.append(r) } }
-                return out
-            }
-            for (sym, mktCap, pe, high52, low52, rating, ratingHex) in enrichments {
-                guard let idx = stocks.firstIndex(where: { $0.symbol == sym }) else { continue }
-                let s = stocks[idx]
-                stocks[idx] = Stock(
-                    symbol: s.symbol, name: s.name,
-                    price:  s.price,  change: s.change, pct: s.pct, volume: s.volume,
-                    high52: high52 > 0 ? high52 : s.high52,
-                    low52:  low52  > 0 ? low52  : s.low52,
-                    pe:     pe, mktCap: mktCap,
-                    rating: rating, ratingHex: ratingHex,
-                    sector: s.sector
-                )
-            }
-            if batchStart + 5 < symbols.count {
-                try? await Task.sleep(for: .milliseconds(300))
-            }
-        }
-
-        isLoadingMarketData = false
-    }
-
-    func loadChartData(symbol: String, timeframe: String) async {
-        let key = "\(symbol)_\(timeframe)"
-        guard chartData[key] == nil else { return }
-        let points = await MarketService.shared.fetchChartData(symbol: symbol, timeframe: timeframe)
-        if !points.isEmpty { chartData[key] = points }
-    }
-
-    /// Connects to Finnhub WebSocket and applies real-time trade prices.
-    /// Throttled to at most one UI update per symbol per 2 seconds so large-caps
-    /// (AAPL/NVDA trade 1000s of times/min) don't flood SwiftUI's render loop.
-    /// Auto-reconnects on disconnect. Call once from a long-lived Task.
-    func startLivePriceStream() async {
-        while !Task.isCancelled {
-            for await (symbol, price) in await MarketService.shared.liveTradeStream() {
-                let now = Date()
-                // Throttle: skip if same symbol updated within 2 s
-                if let last = lastWSUpdate[symbol], now.timeIntervalSince(last) < 2 { continue }
-                // Skip noise below 1 cent
-                guard let idx = stocks.firstIndex(where: { $0.symbol == symbol }) else { continue }
-                let s = stocks[idx]
-                guard abs(price - s.price) >= 0.01 else { continue }
-
-                lastWSUpdate[symbol] = now
-                let prevClose = s.price - s.change
-                let newChange = price - prevClose
-                let newPct    = prevClose > 0 ? newChange / prevClose * 100 : s.pct
-                previousPrices[symbol] = s.price
-                stocks[idx] = Stock(
-                    symbol: s.symbol, name: s.name,
-                    price: price, change: newChange, pct: newPct,
-                    volume: s.volume, high52: s.high52, low52: s.low52,
-                    pe: s.pe, mktCap: s.mktCap,
-                    rating: s.rating, ratingHex: s.ratingHex, sector: s.sector
-                )
-                checkAndTriggerSLTP()
-                checkPriceAlerts()
-            }
-            // Stream ended (disconnect/error) — wait 3 s then reconnect
-            try? await Task.sleep(for: .seconds(3))
-        }
-    }
-
-    /// Lightweight price-only refresh — 1 API call per symbol instead of 3.
-    /// Safe to call every 15 s without hitting Finnhub rate limits.
-    func refreshPrices() async {
-        isRefreshingPrices = true
-        defer { isRefreshingPrices = false }
-        let updates = await MarketService.shared.fetchQuotesOnly()
-        guard !updates.isEmpty else { return }
-        previousPrices = Dictionary(uniqueKeysWithValues: stocks.map { ($0.symbol, $0.price) })
-        stocks = stocks.map { stock in
-            guard let u = updates[stock.symbol] else { return stock }
-            return Stock(symbol: stock.symbol, name: stock.name,
-                         price: u.price, change: u.change, pct: u.pct,
-                         volume: stock.volume, high52: stock.high52, low52: stock.low52,
-                         pe: stock.pe, mktCap: stock.mktCap,
-                         rating: stock.rating, ratingHex: stock.ratingHex, sector: stock.sector)
-        }
-        checkAndTriggerSLTP()
-        checkPriceAlerts()
-        maybeSendPriceAlerts()
-    }
-
-    /// +1 if price rose since last refresh, -1 if fell, 0 if unchanged.
-    func priceDirection(for symbol: String, current: Double) -> Int {
-        guard let prev = previousPrices[symbol], abs(current - prev) > 0.001 else { return 0 }
-        return current > prev ? 1 : -1
-    }
-
-    func refreshChart(symbol: String, timeframe: String) async {
-        let key = "\(symbol)_\(timeframe)"
-        chartData.removeValue(forKey: key)
-        let points = await MarketService.shared.fetchChartData(symbol: symbol, timeframe: timeframe)
-        if !points.isEmpty { chartData[key] = points }
-    }
-
-    // MARK: Computed portfolio
-
-    var holdings: [Holding] {
-        currentPositions().compactMap { symbol, pos in
-            guard pos.qty > 0 else { return nil }
-            let price = stocks.first { $0.symbol == symbol }?.price ?? pos.avgCost
-            return Holding(symbol: symbol, shares: pos.qty, avgCost: pos.avgCost, current: price)
-        }.sorted { $0.marketValue > $1.marketValue }
-    }
-
-    var unrealizedPnL: Double { holdings.reduce(0) { $0 + $1.pnl } }
-    var totalPnL:      Double { unrealizedPnL + realizedPnL }
-    var winRate:       Double {
-        guard closedTradeCount > 0 else { return 0 }
-        return Double(winCount) / Double(closedTradeCount)
-    }
-
-    /// Consecutive winning closes, most recent first.
-    var currentWinStreak: Int {
-        closedTrades.prefix(while: \.isWin).count
-    }
-
-    /// Longest run of consecutive winning closes ever.
-    var bestWinStreak: Int {
-        var best = 0, run = 0
-        for trade in closedTrades {
-            run = trade.isWin ? run + 1 : 0
-            best = max(best, run)
-        }
-        return best
-    }
-
-    /// Winning closes made today (for the "Profit Streak" daily challenge).
-    var greenClosesToday: Int {
-        closedTrades.filter { $0.isWin && Calendar.current.isDateInToday($0.closedAt) }.count
-    }
-
-    var pnlCandles: [Candle] {
-        let chronological = orders.reversed()
-        guard !chronological.isEmpty else { return [] }
-        var positions: [String: (qty: Int, totalCost: Double)] = [:]
-        var accRealized = 0.0
-        var prevPnL     = 0.0
-        var result:     [Candle] = []
-        let df = Self.dayLabelFormatter
-
-        for order in chronological {
-            switch order.side {
-            case .buy:
-                let e = positions[order.symbol] ?? (qty: 0, totalCost: 0)
-                positions[order.symbol] = (e.qty + order.qty,
-                                           e.totalCost + Double(order.qty) * order.entryPrice)
-            case .sell:
-                if var e = positions[order.symbol], e.qty > 0 {
-                    let soldQty = min(order.qty, e.qty)
-                    let avgCost = e.totalCost / Double(e.qty)
-                    accRealized += (order.entryPrice - avgCost) * Double(soldQty)
-                    let frac    = Double(e.qty - soldQty) / Double(e.qty)
-                    e.qty       -= soldQty
-                    e.totalCost *= frac
-                    positions[order.symbol] = e
-                }
-            }
-            let unrealized = positions.reduce(0.0) { sum, kv in
-                guard kv.value.qty > 0 else { return sum }
-                let avg   = kv.value.totalCost / Double(kv.value.qty)
-                let price = stocks.first { $0.symbol == kv.key }?.price ?? avg
-                return sum + (price - avg) * Double(kv.value.qty)
-            }
-            let currentPnL = unrealized + accRealized
-            let day = df.string(from: order.date)
-            if let last = result.last, last.day == day {
-                // Same day: extend that day's candle instead of adding a duplicate
-                result[result.count - 1] = Candle(
-                    day:   day,
-                    open:  last.open,
-                    high:  max(last.high, currentPnL),
-                    low:   min(last.low,  currentPnL),
-                    close: currentPnL
-                )
-            } else {
-                result.append(Candle(
-                    day:   day,
-                    open:  prevPnL,
-                    high:  max(prevPnL, currentPnL),
-                    low:   min(prevPnL, currentPnL),
-                    close: currentPnL
-                ))
-            }
-            prevPnL = currentPnL
-        }
-        return result
-    }
-
-    // MARK: Leaderboard
-
-    /// Incremented every 60 s by LeaderboardView so @Observable re-evaluates bot PnLs.
-    var leaderboardRefreshTick = 0
-
-    var leaderboard: [LeaderboardEntry] {
-        _ = leaderboardRefreshTick  // register @Observable dependency for live updates
-        var entries: [LeaderboardEntry] = [
-            .init(rank: 0, name: "Atlas",  pnl: allTimeBotPnL( 2_200,  5.5, 140, 1001), winRate: 58.4, trades: 42 + botTradeOffset(1001), colorHex: 0xF59E0B, symbol: "▲"),
-            .init(rank: 0, name: "Cipher", pnl: allTimeBotPnL( 1_050,  2.8,  90, 1002), winRate: 54.1, trades: 37 + botTradeOffset(1002), colorHex: 0x6D74FF, symbol: "◆"),
-            .init(rank: 0, name: "Nova",   pnl: allTimeBotPnL(   380,  1.0,  70, 1003), winRate: 51.8, trades: 31 + botTradeOffset(1003), colorHex: 0x38D4FF, symbol: "★"),
-            .init(rank: 0, name: "Vanta",  pnl: allTimeBotPnL(  -280, -1.8,  80, 1004), winRate: 46.2, trades: 28 + botTradeOffset(1004), colorHex: 0x4ADE80, symbol: "◉"),
-            .init(rank: 0, name: "Orion",  pnl: allTimeBotPnL(  -750, -3.5, 100, 1005), winRate: 43.5, trades: 24 + botTradeOffset(1005), colorHex: 0x38D4FF, symbol: "✦"),
-            .init(rank: 0, name: "Solace", pnl: allTimeBotPnL(-1_150, -2.2, 110, 1006), winRate: 40.8, trades: 19 + botTradeOffset(1006), colorHex: 0xF472B6, symbol: "◈"),
-            .init(rank: 0, name: "Apex",   pnl: allTimeBotPnL(-1_900, -6.0, 130, 1007), winRate: 37.3, trades: 15 + botTradeOffset(1007), colorHex: 0xFB923C, symbol: "▲"),
-            .init(rank: 0, name: userName, pnl: totalPnL, winRate: winRate * 100,
-                  trades: orders.count, colorHex: 0xB06AFF, symbol: "♛", isMe: true),
-        ]
-        entries.sort { $0.pnl > $1.pnl }
-        return entries.enumerated().map { i, e in
-            LeaderboardEntry(rank: i + 1, name: e.name, pnl: e.pnl, winRate: e.winRate,
-                             trades: e.trades, colorHex: e.colorHex, symbol: e.symbol, isMe: e.isMe)
-        }
-    }
-
-    var weeklyLeaderboard: [LeaderboardEntry] {
-        _ = leaderboardRefreshTick  // register @Observable dependency for live updates
-        var entries: [LeaderboardEntry] = [
-            .init(rank: 0, name: "Vanta",  pnl: weeklyBotPnL( 1.7,  55, 2001), winRate: 66.7, trades: 12 + botTradeOffset(2001), colorHex: 0x4ADE80, symbol: "◉"),
-            .init(rank: 0, name: "Solace", pnl: weeklyBotPnL( 0.9,  40, 2002), winRate: 60.0, trades:  9 + botTradeOffset(2002), colorHex: 0xF472B6, symbol: "◈"),
-            .init(rank: 0, name: "Nova",   pnl: weeklyBotPnL( 0.3,  30, 2003), winRate: 55.6, trades:  8 + botTradeOffset(2003), colorHex: 0x38D4FF, symbol: "★"),
-            .init(rank: 0, name: "Orion",  pnl: weeklyBotPnL(-0.4,  38, 2004), winRate: 44.4, trades:  7 + botTradeOffset(2004), colorHex: 0x38D4FF, symbol: "✦"),
-            .init(rank: 0, name: "Cipher", pnl: weeklyBotPnL(-0.9,  48, 2005), winRate: 40.0, trades:  6 + botTradeOffset(2005), colorHex: 0x6D74FF, symbol: "◆"),
-            .init(rank: 0, name: "Atlas",  pnl: weeklyBotPnL(-1.4,  52, 2006), winRate: 37.5, trades:  8 + botTradeOffset(2006), colorHex: 0xF59E0B, symbol: "▲"),
-            .init(rank: 0, name: "Apex",   pnl: weeklyBotPnL(-2.1,  60, 2007), winRate: 33.3, trades:  5 + botTradeOffset(2007), colorHex: 0xFB923C, symbol: "▲"),
-            .init(rank: 0, name: userName, pnl: totalPnL, winRate: winRate * 100,
-                  trades: orders.count, colorHex: 0xB06AFF, symbol: "♛", isMe: true),
-        ]
-        entries.sort { $0.pnl > $1.pnl }
-        return entries.enumerated().map { i, e in
-            LeaderboardEntry(rank: i + 1, name: e.name, pnl: e.pnl, winRate: e.winRate,
-                             trades: e.trades, colorHex: e.colorHex, symbol: e.symbol, isMe: e.isMe)
-        }
-    }
-
-    // MARK: Bot simulation helpers
-
-    /// All-time PnL: base + daily trend since Jan 1 2025 + deterministic daily/hourly noise.
-    private func allTimeBotPnL(_ base: Double, _ dailyDrift: Double, _ vol: Double, _ seed: UInt64) -> Double {
-        let daysSinceEpoch = Date().timeIntervalSince1970 / 86_400
-        let day  = Int(floor(daysSinceEpoch))
-        let hour = Int((daysSinceEpoch - floor(daysSinceEpoch)) * 24)
-        let elapsed     = Double(day - 20_089)  // days since Jan 1 2025
-        let dailyNoise  = botNoise(seed: seed,        day: day, hour: 0)    * vol
-        let hourlyNoise = botNoise(seed: seed &+ 999, day: day, hour: hour) * vol * 0.15
-        return base + dailyDrift * elapsed + dailyNoise + hourlyNoise
-    }
-
-    /// Weekly PnL: resets each Monday, accumulates hourly drift + noise through the week.
-    private func weeklyBotPnL(_ hourlyDrift: Double, _ vol: Double, _ seed: UInt64) -> Double {
-        let now = Date()
-        var cal = Calendar(identifier: .iso8601)
-        cal.timeZone = TimeZone.current
-        let startOfWeek  = cal.date(from: cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)) ?? now
-        let hoursIntoWeek = now.timeIntervalSince(startOfWeek) / 3_600
-        let dayInWeek    = Int(hoursIntoWeek / 24)
-        let hourInWeek   = Int(hoursIntoWeek)
-        let dailyNoise   = botNoise(seed: seed,        day: dayInWeek, hour: 0)         * vol
-        let hourlyNoise  = botNoise(seed: seed &+ 999, day: dayInWeek, hour: hourInWeek) * vol * 0.2
-        return hourlyDrift * hoursIntoWeek + dailyNoise + hourlyNoise
-    }
-
-    /// Deterministic value in [-0.5, 0.5] from seed + day + hour (splitmix64-style hash).
-    private func botNoise(seed: UInt64, day: Int, hour: Int) -> Double {
-        var v = seed
-            &+ UInt64(bitPattern: Int64(day)  &* Int64(2_654_435_761))
-            &+ UInt64(bitPattern: Int64(hour) &* Int64(1_013_904_223))
-        v = (v ^ (v >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        v = (v ^ (v >> 27)) &* 0x94D0_49BB_1331_11EB
-        v =  v ^ (v >> 31)
-        return Double(v >> 11) / Double(1 << 53) - 0.5
-    }
-
-    /// Extra trades that vary day-to-day per bot (0–3 additional trades).
-    private func botTradeOffset(_ seed: UInt64) -> Int {
-        let day = Int(Date().timeIntervalSince1970 / 86_400)
-        var v = seed &+ UInt64(bitPattern: Int64(day) &* Int64(1_000_003))
-        v = (v ^ (v >> 30)) &* 0xBF58_476D_1CE4_E5B9
-        v =  v ^ (v >> 31)
-        return Int(v >> 62)  // 0–3
-    }
-
-    // MARK: Achievements
-
-    var achievements: [Achievement] {
-        [
-            Achievement(id: 1, icon: "🔥", name: "Hot Streak",    detail: "Win 5 trades in a row",        earned: bestWinStreak >= 5),
-            Achievement(id: 2, icon: "💎", name: "Diamond Hands", detail: "Hold a position for 30+ days", earned: hasLongHold),
-            Achievement(id: 3, icon: "🧀", name: "Big Baller",    detail: "Make 10K+ in Mock Capital",    earned: totalPnL >= 10_000),
-            Achievement(id: 4, icon: "⚡", name: "Speed Trader",  detail: "Execute 50 trades in one day",  earned: maxTradesInOneDay >= 50),
-            Achievement(id: 5, icon: "🏆", name: "Top Gainer",    detail: "Reach #1 on the leaderboard",   earned: leaderboard.first?.isMe == true),
-            Achievement(id: 6, icon: "🌙", name: "Night Owl",     detail: "Trade after-hours 20 times",    earned: afterHoursTrades >= 20),
-        ]
-    }
-
-    // MARK: Private helpers
-
-    private func currentPositions() -> [String: (qty: Int, avgCost: Double)] {
-        var pos: [String: (qty: Int, totalCost: Double)] = [:]
-        for o in orders.reversed() {
-            switch o.side {
-            case .buy:
-                let e = pos[o.symbol] ?? (qty: 0, totalCost: 0)
-                pos[o.symbol] = (e.qty + o.qty, e.totalCost + Double(o.qty) * o.entryPrice)
-            case .sell:
-                if var e = pos[o.symbol], e.qty > 0 {
-                    let soldQty = min(o.qty, e.qty)
-                    let frac    = Double(e.qty - soldQty) / Double(e.qty)
-                    e.qty       -= soldQty
-                    e.totalCost *= frac
-                    pos[o.symbol] = e
-                }
-            }
-        }
-        return pos.mapValues { e in
-            (qty: e.qty, avgCost: e.qty > 0 ? e.totalCost / Double(e.qty) : 0)
-        }.filter { $0.value.qty > 0 }
-    }
-
-    private func currentAvgCost(for symbol: String) -> Double {
-        currentPositions()[symbol]?.avgCost ?? 0
-    }
-
-    private var hasLongHold: Bool {
-        holdings.contains { h in
-            guard let order = orders.last(where: { $0.symbol == h.symbol && $0.side == .buy }) else { return false }
-            return Date().timeIntervalSince(order.date) > 30 * 86_400
-        }
-    }
-
-    private var maxTradesInOneDay: Int {
-        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd"
-        var counts: [String: Int] = [:]
-        for o in orders { counts[df.string(from: o.date), default: 0] += 1 }
-        return counts.values.max() ?? 0
-    }
-
-    private var afterHoursTrades: Int {
-        orders.filter { Self.isOutsideMarketHours($0.date) }.count
-    }
-
-    /// True outside regular NYSE hours: Mon–Fri 9:30–16:00 New York time.
-    static func isOutsideMarketHours(_ date: Date) -> Bool {
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "America/New_York") ?? .current
-        let c = cal.dateComponents([.weekday, .hour, .minute], from: date)
-        guard let weekday = c.weekday, let hour = c.hour, let minute = c.minute else { return false }
-        if weekday == 1 || weekday == 7 { return true }   // Sunday / Saturday
-        let minutes = hour * 60 + minute
-        return minutes < 9 * 60 + 30 || minutes >= 16 * 60
-    }
-
-}
-
-// MARK: - Trading
+// MARK: - Market data
 
 struct Stock: Identifiable, Hashable {
     let symbol: String
@@ -1139,18 +170,13 @@ struct Stock: Identifiable, Hashable {
         guard high52 > low52 else { return 0 }
         return (price - low52) / (high52 - low52)
     }
-}
 
-struct Holding: Identifiable {
-    let symbol:  String
-    let shares:  Int
-    let avgCost: Double
-    let current: Double
-    var id: String { symbol }
-
-    var pnl:         Double { (current - avgCost) * Double(shares) }
-    var pct:         Double { guard avgCost > 0 else { return 0 }; return (current - avgCost) / avgCost * 100 }
-    var marketValue: Double { current * Double(shares) }
+    /// Same stock at a new price; fundamentals are kept.
+    func withPrice(_ price: Double, change: Double, pct: Double) -> Stock {
+        Stock(symbol: symbol, name: name, price: price, change: change, pct: pct,
+              volume: volume, high52: high52, low52: low52, pe: pe, mktCap: mktCap,
+              rating: rating, ratingHex: ratingHex, sector: sector)
+    }
 }
 
 struct NewsItem: Identifiable {
@@ -1160,13 +186,6 @@ struct NewsItem: Identifiable {
     let time:     String
     let tag:      String
     let bullish:  Bool
-}
-
-struct PriceAlert: Identifiable, Codable {
-    var id = UUID()
-    let symbol: String
-    let target: String
-    let above:  Bool
 }
 
 struct Candle: Identifiable {
@@ -1179,51 +198,31 @@ struct Candle: Identifiable {
     var id:    String { day }
 }
 
-enum OrderSide: String, CaseIterable, Codable {
-    case buy = "BUY"
-    case sell = "SELL"
-}
+// MARK: - Alerts
 
-struct TradeOrder: Identifiable, Codable {
-    let id:         UUID
-    let symbol:     String
-    let name:       String
-    let side:       OrderSide
-    let qty:        Int
-    let entryPrice: Double
-    let stopLoss:   String
-    let takeProfit: String
-    let date:       Date
+struct PriceAlert: Identifiable, Codable {
+    var id = UUID()
+    let symbol: String
+    let target: Double
+    let above:  Bool
 
-    init(symbol: String, name: String, side: OrderSide, qty: Int,
-         entryPrice: Double, stopLoss: String, takeProfit: String) {
-        self.id         = UUID()
-        self.symbol     = symbol
-        self.name       = name
-        self.side       = side
-        self.qty        = qty
-        self.entryPrice = entryPrice
-        self.stopLoss   = stopLoss
-        self.takeProfit = takeProfit
-        self.date       = Date()
+    init(symbol: String, target: Double, above: Bool) {
+        self.symbol = symbol
+        self.target = target
+        self.above  = above
+    }
+
+    /// Older versions saved `target` as a String.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id     = try c.decode(UUID.self, forKey: .id)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        above  = try c.decode(Bool.self, forKey: .above)
+        target = try c.decodeLenientDecimal(forKey: .target)?.doubleValue ?? 0
     }
 }
 
-// MARK: - Leaderboard & achievements
-
-struct LeaderboardEntry: Identifiable {
-    let rank:      Int
-    let name:      String
-    let pnl:       Double
-    let winRate:   Double
-    let trades:    Int
-    let colorHex:  UInt
-    let symbol:    String
-    var isMe:      Bool = false
-
-    var id:    Int   { rank }
-    var color: Color { Color(hex: colorHex) }
-}
+// MARK: - Achievements
 
 struct Achievement: Identifiable {
     let id:     Int
@@ -1237,10 +236,23 @@ struct Achievement: Identifiable {
 
 struct OnboardingData {
     var name       = ""
-    var experience = ""
-    var goal       = ""
-    var frequency  = ""
-    var capital    = ""
-    var risk       = ""
-    var sectors:   [String] = []
+    var experience: ExperienceLevel?  = nil
+    var goal:       TradingGoal?      = nil
+    var frequency:  TradingFrequency? = nil
+    var capital:    StartingCapital?  = nil
+    var risk:       RiskLevel?        = nil
+    var sectors:    [String] = []
+}
+
+// MARK: - Decoding helpers
+
+extension KeyedDecodingContainer {
+    /// Decodes an amount saved either as a number or as a numeric String.
+    /// Missing, null, or empty/non-numeric strings decode as nil.
+    func decodeLenientDecimal(forKey key: Key) throws -> Decimal? {
+        if let number = try? decodeIfPresent(Decimal.self, forKey: key) { return number.roundedToCents() }
+        guard let text = try? decodeIfPresent(String.self, forKey: key),
+              let value = Decimal(string: text) else { return nil }
+        return value.roundedToCents()
+    }
 }

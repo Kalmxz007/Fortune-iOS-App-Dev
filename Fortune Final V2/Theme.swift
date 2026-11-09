@@ -100,3 +100,9 @@ extension Double {
         return "\(rounded > 0 ? "+" : "")\(rounded.money(decimals))%"
     }
 }
+
+/// Ledger amounts format the same way as quotes.
+extension Decimal {
+    func money(_ decimals: Int = 2) -> String       { doubleValue.money(decimals) }
+    func signedMoney(_ decimals: Int = 2) -> String { doubleValue.signedMoney(decimals) }
+}

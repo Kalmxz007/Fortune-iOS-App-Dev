@@ -35,7 +35,7 @@ Built entirely in **SwiftUI** with Swift Concurrency, Swift Charts, and the Obse
 - XP and levels earned from real trading activity
 - Daily challenges (First Blood, Diversify, Profit Streak) that reset at midnight
 - Achievements such as Hot Streak (5 wins in a row) and Night Owl (trades outside NYSE hours)
-- Global and weekly leaderboard against simulated traders
+- Practice League: all-time and weekly rankings against clearly labeled simulated traders, ranked by **% return** so every starting balance competes fairly
 
 **Personalization**
 - 9-step onboarding that tailors the starting balance, default stop-loss / take-profit %, chart timeframe, sort order, and sector focus
@@ -50,36 +50,41 @@ Built entirely in **SwiftUI** with Swift Concurrency, Swift Charts, and the Obse
 | Area | Technology |
 |------|------------|
 | UI | SwiftUI, Swift Charts, Canvas (donut chart, confetti) |
-| State | Observation (`@Observable`), single source of truth in `AppModel` |
+| State | Observation (`@Observable`); a thin `AppModel` coordinating focused types |
+| Money | `Decimal` ledger (exact cents); market quotes as `Double` |
 | Concurrency | async/await, `actor`, `TaskGroup`, `AsyncStream` |
 | Networking | `URLSession` REST + `URLSessionWebSocketTask` |
 | Data | [Finnhub](https://finnhub.io) (quotes, fundamentals, news, live trades), Yahoo Finance (OHLC candles) |
 | Persistence | `Codable` + `UserDefaults`, `NSUbiquitousKeyValueStore` for iCloud sync |
 | Notifications | UserNotifications (local only) |
-| Testing | Swift Testing (26 unit tests) |
+| Testing | Swift Testing (34 unit tests) |
 
 ---
 
 ## Architecture
 
 ```
-Views (SwiftUI)  ──reads/writes──▶  AppModel (@Observable, MainActor)  ──async──▶  MarketService (actor)
-  TradeView                          • portfolio & order engine                   • Finnhub REST + WebSocket
-  PnLView                            • SL/TP execution, alerts                    • Yahoo Finance charts
-  LeaderboardView                    • XP, challenges, achievements
-  AccountView                        • persistence & iCloud sync
+Views (SwiftUI)  ──▶  AppModel (@Observable coordinator)
+                        ├─ PortfolioEngine   ledger: cash, orders, positions, P&L   (pure struct)
+                        ├─ Gamification      XP, levels, challenges, achievements   (pure struct)
+                        ├─ PracticeLeague    rankings vs. simulated traders         (pure functions)
+                        ├─ MarketDataStore   quotes, charts, news, live feed  ──async──▶  MarketService (actor)
+                        └─ PersistenceStore  save/load (protocol), iCloud watchlist
 ```
 
-- **`AppModel`** owns all app state. Holdings, P&L, and the equity curve are *derived* from the order history rather than stored separately, so they can never drift out of sync.
+- **`AppModel`** is glue: it reacts to price changes (stop loss / take profit, alerts), sends notifications, drives toasts, and saves. The rules live in the types below it.
+- **`PortfolioEngine`** is a plain value type with no UI, networking, or storage, so every trading rule is unit tested directly.
 - **`MarketService`** is an `actor`, so network work stays off the main thread and its state is isolated.
-- **`NotificationManager`** wraps local notifications and checks authorization before sending.
+- **`PersistenceStore`** is a protocol, so tests run against isolated storage instead of the real app's data.
 
 ### Engineering details
 
 - **Rate-limit aware loading.** Finnhub's free tier allows 60 calls/minute. Quotes load first so the UI fills in within a second or two. Fundamentals (P/E, market cap, 52-week range, analyst rating) are then fetched in small batches with pauses between them. Rate-limited or empty responses are rejected so a `429` can never turn into a $0 price that falsely triggers a stop loss.
 - **Throttled live feed.** Large-cap stocks trade thousands of times a minute. WebSocket updates are throttled to one UI update per symbol every 2 seconds and ignore sub-cent moves. The stream reconnects automatically.
 - **Order engine.** Weighted average-cost basis, realized P&L on partial sells, and automatic stop-loss / take-profit execution that records the exit reason in the trade journal.
-- **Testable by design.** `AppModel` accepts an injected `UserDefaults`, so each test runs against isolated storage.
+- **Exact money.** The ledger uses `Decimal` and rounds to cents at execution, so `33.33 × 3` is exactly `99.99` (in `Double` it's `99.99000000000001`). Quotes stay `Double` and convert only at the edges.
+- **Incremental positions.** Positions update in O(1) per trade instead of replaying the whole order history on every read. The same update function rebuilds positions when a save is loaded, and a test checks that the two always agree.
+- **Typed, backward-compatible data.** Preferences and order fields are enums and numbers instead of strings; custom decoding still loads saves written by older versions (covered by a test).
 
 ---
 
@@ -110,7 +115,7 @@ Press **⌘U** in Xcode, or run:
 xcodebuild test -project "Fortune Final V2.xcodeproj" -scheme "Fortune Final V2" \
   -destination "platform=iOS Simulator,name=iPhone 18 Pro"
 ```
-The tests cover cost basis, realized P&L, stop-loss / take-profit execution, win streaks, daily-challenge XP, price alerts, persistence across relaunches, NYSE market-hours detection, and number formatting.
+The tests cover cost basis, realized P&L, exact-cent `Decimal` math, incremental positions vs. full replay, stop-loss / take-profit execution, win streaks, daily-challenge XP, price alerts, persistence (including loading old save formats), Practice League ranking, stock filtering, NYSE market-hours detection, and number formatting.
 
 ---
 
@@ -118,14 +123,28 @@ The tests cover cost basis, realized P&L, stop-loss / take-profit execution, win
 
 | File | Responsibility |
 |------|----------------|
+| **App state & logic** | |
+| `AppModel.swift` | Observable coordinator: profile, settings, reacting to prices, notifications, saving |
+| `PortfolioEngine.swift` | Ledger: order execution, incremental positions, realized P&L, stop loss / take profit, equity curve |
+| `Gamification.swift` | XP, levels, daily challenges, achievements, NYSE market hours |
+| `PracticeLeague.swift` | Leaderboard vs. simulated traders, ranked by % return |
+| `MarketDataStore.swift` | Quotes, charts, news, live price feed, O(1) symbol lookup |
+| `Persistence.swift` | Saved state, `PersistenceStore` protocol, iCloud watchlist |
+| `Models.swift` | Domain types: orders, closed trades, holdings, stocks, alerts |
+| `Preferences.swift` | Typed onboarding choices (risk, experience, goal, frequency, timeframe) |
+| `Money.swift` | `Decimal` helpers: cent rounding, quote conversion |
+| `MarketService.swift` | Finnhub / Yahoo networking and the WebSocket feed (actor) |
+| `NotificationManager.swift` | Local notification permissions and delivery |
+| **Screens** | |
 | `FortuneApp.swift` | App entry point |
 | `RootView.swift` | Onboarding vs. main shell, header, tab bar, global toasts |
-| `Models.swift` | `AppModel` (state, order engine, gamification, persistence) and domain types |
-| `MarketService.swift` | Finnhub / Yahoo networking and the WebSocket live feed |
-| `NotificationManager.swift` | Local notification permissions and delivery |
-| `TradeView.swift` | Trade screen plus order, stock detail, and price alert sheets |
+| `TradeView.swift` | Trade screen container: state and sheets |
+| `TradeChartHeader.swift` | Live price, timeframe picker, candlestick chart |
+| `TradeSections.swift` | Positions, movers, filter bar, "For You" strip, stock rows |
+| `StockFilter.swift` | Search / sector / sort logic (no SwiftUI, unit tested) |
+| `OrderSheet.swift`, `StockDetailSheet.swift`, `PriceAlertsSheet.swift` | Trade sheets |
 | `PnLView.swift` | Portfolio: P&L, equity curve, allocation, positions, journal, news |
-| `LeaderboardView.swift` | Leaderboard and daily challenges |
+| `LeaderboardView.swift` | Practice League and daily challenges |
 | `AccountView.swift` | Profile, stats, achievements, settings, privacy policy |
 | `OnboardingView.swift` | 9-step personalized onboarding |
 | `TutorialView.swift` | In-app how-to guide |

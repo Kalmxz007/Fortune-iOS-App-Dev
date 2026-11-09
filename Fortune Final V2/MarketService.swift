@@ -32,7 +32,6 @@ actor MarketService {
         "DIS", "GS", "RIVN", "NIO", "MSTR", "MARA"
     ]
 
-    static let timeframes = ["1D", "1W", "1M", "3M"]
 
     static let sectors = ["All", "Tech", "Finance", "Consumer", "Media", "Crypto", "EV"]
 
@@ -167,14 +166,13 @@ actor MarketService {
     }
 
     /// Fetches full OHLC candle history from the Yahoo Finance chart API (free, no key required).
-    func fetchChartData(symbol: String, timeframe: String) async -> [Candle] {
+    func fetchChartData(symbol: String, timeframe: Timeframe) async -> [Candle] {
         let (interval, range): (String, String)
         switch timeframe {
-        case "1D": (interval, range) = ("5m",  "1d")
-        case "1W": (interval, range) = ("60m", "5d")
-        case "1M": (interval, range) = ("1d",  "1mo")
-        case "3M": (interval, range) = ("1d",  "3mo")
-        default:   (interval, range) = ("1d",  "1mo")
+        case .day:         (interval, range) = ("5m",  "1d")
+        case .week:        (interval, range) = ("60m", "5d")
+        case .month:       (interval, range) = ("1d",  "1mo")
+        case .threeMonths: (interval, range) = ("1d",  "3mo")
         }
         let urlStr = "https://query1.finance.yahoo.com/v8/finance/chart/\(symbol)"
             + "?interval=\(interval)&range=\(range)&includePrePost=false"
@@ -242,12 +240,12 @@ actor MarketService {
     private static let monthFormatter:   DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMM d";     return f }()
 
     /// Chart x-axis label. Must be unique per bar, since Charts treats it as a category.
-    private static func label(_ ts: Int, timeframe: String) -> String {
+    private static func label(_ ts: Int, timeframe: Timeframe) -> String {
         let d = Date(timeIntervalSince1970: TimeInterval(ts))
         switch timeframe {
-        case "1D": return dayTimeFormatter.string(from: d)
-        case "1W": return weekFormatter.string(from: d)
-        default:   return monthFormatter.string(from: d)
+        case .day:                  return dayTimeFormatter.string(from: d)
+        case .week:                 return weekFormatter.string(from: d)
+        case .month, .threeMonths:  return monthFormatter.string(from: d)
         }
     }
 
